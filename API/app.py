@@ -8,7 +8,7 @@ import atexit
 app = Flask(__name__)
 
 # Configuration
-GPS_ACCURACY_THRESHOLD = 15
+GPS_ACCURACY_THRESHOLD = 10
 WEATHER_API_KEY = '5949fe14755e489992a234453251702'
 WEATHER_API_URL = 'http://api.weatherapi.com/v1/current.json'
 LOCATION = 'Dublin'
@@ -53,10 +53,14 @@ def get_current_datetime():
     }
 
 def calculate_time_outside(user_id):
-    """Calculate the time spent outside since the last 'false' entry."""
+    """Calculate the time spent outside since the last 'false' entry, only for the current day."""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Get the current date
+        current_date = datetime.now().date()
+
         cur.execute(
             """
             SELECT "time" FROM app_data
@@ -64,13 +68,15 @@ def calculate_time_outside(user_id):
             AND "time" > COALESCE(
                 (SELECT "time" FROM app_data
                  WHERE user_id = %s AND "outside?" = FALSE
+                 AND DATE("time") = %s
                  ORDER BY "time" DESC
                  LIMIT 1),
                 '1970-01-01'::timestamp
             )
+            AND DATE("time") = %s
             ORDER BY "time" ASC
             """,
-            (user_id, user_id)
+            (user_id, user_id, current_date, current_date)
         )
         results = cur.fetchall()
         time_outside = 0
@@ -86,6 +92,7 @@ def calculate_time_outside(user_id):
         print(f"Error calculating time outside: {e}")
         return 0
 
+
 # Schedule the weather update every hour
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=fetch_weather, trigger="interval", hours=1)
@@ -99,12 +106,17 @@ def check_location():
     data = request.json
     user_id = data.get('user_id')
     gps_accuracy = data.get('gps_accuracy')
+    is_connected_to_wifi = data.get('is_connected_to_wifi', False)  # Default to False if not provided
 
     if user_id is None or gps_accuracy is None:
         return jsonify({"error": "user_id and GPS accuracy are required"}), 400
 
     # Determine if the user is outside
     is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD
+
+    # If the user is connected to Wi-Fi, assume they are inside
+    if is_connected_to_wifi:
+        is_outside = False
 
     # Get current date and time
     current_datetime = get_current_datetime()
@@ -181,4 +193,4 @@ if __name__ == '__main__':
     fetch_weather()
     app.run(debug=True)
 
-# python -m flask run --host=0.0.0.0
+#curl -X POST http://16.170.231.125:8000/check-location -H "Content-Type: application/json" -d "{\"user_id\": \"user123\", \"gps_accuracy\": 10}"{"is_outside":true,"time_outside":0,"weather":"Partly cloudy"}
