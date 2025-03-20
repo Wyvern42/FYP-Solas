@@ -215,10 +215,31 @@ def check_location():
     # Get current date and time
     current_datetime = get_current_datetime()
 
+    # Fetch the last recorded state of the user
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT "outside?", time FROM updated_table
+        WHERE user_id = %s
+        ORDER BY "time" DESC
+        LIMIT 1
+        """,
+        (user_id,)
+    )
+    result = cur.fetchone()
+    last_is_outside = result[0] if result else False
+    last_time = result[1] if result else None
+
     # Calculate time_outside if transitioning from outside to inside
     time_outside = 0
-    if not is_outside:
-        time_outside = calculate_time_outside(user_id)
+    if (not is_outside and last_is_outside) or (sunset and last_is_outside):
+        # If the user was outside and is now inside, or it's sunset and the user was last outside,
+        # calculate the time spent outside since the last check
+        if last_time:
+            time_outside = (current_datetime - last_time).total_seconds()
+        else:
+            time_outside = 0
 
     # Format time_outside
     time_outside_formatted = format_time(time_outside, separator=":")  # Format as hrs:mins:secs
@@ -240,9 +261,6 @@ def check_location():
 
     # Insert data into the database (only if it is daytime)
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
         # Fetch the latest total_time_outside and total_time_outside_for_given_day for the user
         cur.execute(
             """
@@ -318,7 +336,6 @@ def check_location():
     }
 
     return jsonify(response_data)
-
 if __name__ == '__main__':
     app.run(debug=True)
 
