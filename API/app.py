@@ -215,31 +215,71 @@ def check_location():
     # Get current date and time
     current_datetime = get_current_datetime()
 
-    # Fetch the last recorded state of the user
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT "outside?", time FROM updated_table
-        WHERE user_id = %s
-        ORDER BY "time" DESC
-        LIMIT 1
-        """,
-        (user_id,)
-    )
-    result = cur.fetchone()
-    last_is_outside = result[0] if result else False
-    last_time = result[1] if result else None
-
     # Calculate time_outside if transitioning from outside to inside
     time_outside = 0
-    if (not is_outside and last_is_outside) or (sunset and last_is_outside):
-        # If the user was outside and is now inside, or it's sunset and the user was last outside,
-        # calculate the time spent outside since the last check
-        if last_time:
-            time_outside = (current_datetime - last_time).total_seconds()
-        else:
-            time_outside = 0
+    if not is_outside:
+        time_outside = calculate_time_outside(user_id)
+
+    # Check if it is after sunset and the user was outside before sunset
+    if sunset and is_outside:
+        sunset_time = datetime.strptime(sunset, "%H:%M").time()
+        current_time = datetime.now().time()
+        if current_time > sunset_time:
+            # Fetch the last entry to check if the user was outside before sunset
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT "time", "outside?" FROM updated_table
+                    WHERE user_id = %s
+                    ORDER BY "time" DESC
+                    LIMIT 1
+                    """,
+                    (user_id,)
+                )
+                result = cur.fetchone()
+                if result:
+                    last_time, last_outside_status = result
+                    if last_outside_status:  # User was outside before sunset
+                        # Calculate time spent outside until sunset
+                        sunset_datetime = datetime.combine(datetime.now().date(), sunset_time)
+                        time_outside = (sunset_datetime - last_time).total_seconds()
+
+                        # Mark the user as inside for the final entry
+                        is_outside = False
+
+                        # Format time_outside
+                        time_outside_formatted = format_time(time_outside, separator=":")
+
+                        # Insert the final entry for the day
+                        cur.execute(
+                            """
+                            INSERT INTO updated_table (
+                                user_id, total_time_outside, time, total_available_hours,
+                                total_time_outside_for_given_day, "outside?", weather, time_outside, temperature, uv
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                user_id, time_outside_formatted, current_datetime, 0,  # total_available_hours is 0 after sunset
+                                time_outside_formatted, is_outside, weather, time_outside_formatted, temperature, uv
+                            )
+                        )
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+
+                        # Return response for the final entry
+                        return jsonify({
+                            "message": "Final entry for the day: User marked as inside after sunset.",
+                            "is_outside": is_outside,
+                            "weather": weather,
+                            "time_outside": time_outside_formatted,
+                            "temperature": temperature,
+                            "uv": uv
+                        }), 200
+            except Exception as e:
+                return jsonify({"error": f"Database error: {str(e)}"}), 500
 
     # Format time_outside
     time_outside_formatted = format_time(time_outside, separator=":")  # Format as hrs:mins:secs
@@ -261,6 +301,9 @@ def check_location():
 
     # Insert data into the database (only if it is daytime)
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
         # Fetch the latest total_time_outside and total_time_outside_for_given_day for the user
         cur.execute(
             """
@@ -336,6 +379,8 @@ def check_location():
     }
 
     return jsonify(response_data)
+
+
 if __name__ == '__main__':
     app.run(debug=True)
 
