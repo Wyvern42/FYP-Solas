@@ -485,7 +485,6 @@ def weekly_time_outside_graph():
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
-    """Enhanced endpoint for outdoor time tracking with all safety checks."""
     
     MAX_TIME_BETWEEN_UPDATES = 600  
 
