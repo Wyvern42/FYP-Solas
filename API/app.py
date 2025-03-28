@@ -1,50 +1,46 @@
 from flask import Flask, request, jsonify
-import psycopg2
+from matplotlib.patches import Arc
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+from io import BytesIO
+import base64
 from datetime import datetime, time, timedelta
+import psycopg2
+from typing import Dict, Any, Tuple, List, Optional
+from matplotlib import patheffects
 
+# Initialize Flask app
 app = Flask(__name__)
 
-# Configuration
 GPS_ACCURACY_THRESHOLD = 15
 
-# Database connection details
-DB_HOST = "solasdb.cv868wmkkyqh.eu-north-1.rds.amazonaws.com"
-DB_NAME = "Solasdb"
-DB_USER = "wyvern42"
-DB_PASSWORD = "FullMetal42"
+# Database configuration
+DB_CONFIG = {
+    "host": "solasdb.cv868wmkkyqh.eu-north-1.rds.amazonaws.com",
+    "database": "Solasdb",
+    "user": "wyvern42",
+    "password": "FullMetal42"
+}
 
 def get_db_connection():
-    """Establish a connection to the PostgreSQL database."""
-    return psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD
-    )
+    return psycopg2.connect(**DB_CONFIG)
 
-def get_current_datetime():
-    """Get the current date and time in the required format."""
-    now = datetime.now()
-    return now.strftime("%Y-%m-%d %H:%M:%S")  # Format as YYYY-MM-DD HH:MM:SS
+def get_current_datetime() -> str:
 
-def format_time(total_seconds, separator=":"):
-    """
-    Convert total seconds into hrs:mins:secs format.
-    :param total_seconds: Total time in seconds
-    :param separator: Separator between hrs, mins, secs (default is ":")
-    :return: Formatted time string (e.g., "1:4:15")
-    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def format_time(total_seconds: int) -> str:
+    """Convert total seconds into hrs:mins:secs format."""
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-    return f"{int(hours)}{separator}{int(minutes)}{separator}{int(seconds)}"
+    return f"{int(hours)}:{int(minutes):02d}:{int(seconds):02d}"
 
-def calculate_time_outside(user_id):
-    """Calculate the time spent outside since the last 'false' entry, only for the current day, in seconds."""
+def calculate_time_outside(user_id: str) -> int:
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Get the current date
         current_date = datetime.now().date()
 
         cur.execute(
@@ -70,47 +66,44 @@ def calculate_time_outside(user_id):
             current_time = datetime.now()
             for result in results:
                 last_outside_time = result[0]
-                time_outside += (current_time - last_outside_time).total_seconds()  # Keep it in seconds
-        cur.close()
-        conn.close()
+                time_outside += int((current_time - last_outside_time).total_seconds())
         return time_outside
     except Exception as e:
         print(f"Error calculating time outside: {e}")
         return 0
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-def is_daytime(sunrise, sunset):
-    """Determine if the current time is daytime based on sunrise and sunset times (24-hour format)."""
-    now = datetime.now().time()
+def is_daytime(sunrise: str, sunset: str) -> bool:
     try:
-        sunrise_time = datetime.strptime(sunrise, "%H:%M").time()  # Parse 24-hour format
-        sunset_time = datetime.strptime(sunset, "%H:%M").time()    # Parse 24-hour format
+        now = datetime.now().time()
+        sunrise_time = datetime.strptime(sunrise, "%H:%M").time()
+        sunset_time = datetime.strptime(sunset, "%H:%M").time()
         return sunrise_time <= now <= sunset_time
     except ValueError as e:
         print(f"Error parsing sunrise/sunset times: {e}")
         return False
 
-def calculate_available_hours(sunrise, sunset):
-    """Calculate the total available daylight hours based on sunrise and sunset times (24-hour format)."""
+def calculate_available_hours(sunrise: str, sunset: str) -> float:
     try:
         sunrise_time = datetime.strptime(sunrise, "%H:%M")
         sunset_time = datetime.strptime(sunset, "%H:%M")
         daylight_duration = sunset_time - sunrise_time
-        return round(daylight_duration.total_seconds() / 3600, 2)  # Convert to hours and round to 2 decimal places
+        return round(daylight_duration.total_seconds() / 3600, 2)
     except ValueError as e:
         print(f"Error calculating available hours: {e}")
-        return 0
+        return 0.0
 
 @app.route('/submit-feedback', methods=['POST'])
-def submit_feedback():
-    data = request.json
-    user_id = data.get('user_id')
-    correct_result = data.get('correct_result')
-    gps_accuracy = data.get('gps_accuracy')
+def submit_feedback() -> Tuple[Dict[str, Any], int]:
+    data = request.get_json()
+    if not data:
+        return {"error": "Request must be JSON"}, 400
 
-    if user_id is None or correct_result is None or gps_accuracy is None:
-        return jsonify({"error": "user_id, correct_result, and gps_accuracy are required"}), 400
-
-    current_time = get_current_datetime()  # Use the same time format
+    required_fields = ['user_id', 'correct_result', 'gps_accuracy']
+    if not all(field in data for field in required_fields):
+        return {"error": f"Missing required fields: {required_fields}"}, 400
 
     try:
         conn = get_db_connection()
@@ -121,269 +114,486 @@ def submit_feedback():
             INSERT INTO app_accuracy (user_id, time, correct_result, gps_accuracy)
             VALUES (%s, %s, %s, %s)
             """,
-            (user_id, current_time, correct_result, round(gps_accuracy, 2))  # Round GPS accuracy to 2 decimal places
+            (data['user_id'], get_current_datetime(), 
+             data['correct_result'], round(data['gps_accuracy'], 2))
         )
         conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"message": "Feedback submitted successfully"}), 200
+        return {"message": "Feedback submitted successfully"}, 200
     except Exception as e:
-        return jsonify({"error": f"Database error: {str(e)}"}), 500
+        return {"error": f"Database error: {str(e)}"}, 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-
-@app.route('/weekly-time-outside', methods=['GET'])
-def get_weekly_time_outside():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"error": "user_id is required"}), 400
-
+@app.route('/daily-visualization', methods=['POST'])
+def daily_visualization():
     try:
+        data = request.get_json()
+        if not data or 'user_id' not in data:
+            return jsonify({"error": "user_id is required in request body"}), 400
+
+        user_id = data['user_id']
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Get the start and end of the current week
+        # Get today's date
+        today = datetime.now().date()
+
+        # Get sunrise and sunset from request
+        if 'sunrise' not in data or 'sunset' not in data:
+            return jsonify({
+            }), 400
+
+        sunrise_str = data['sunrise']
+        sunset_str = data['sunset']
+
+        # Get today's total time outside
+        cur.execute(
+            """
+            SELECT total_time_outside_for_given_day FROM updated_table
+            WHERE user_id = %s AND DATE(time) = %s
+            ORDER BY time DESC
+            LIMIT 1
+            """,
+            (user_id, today)
+        )
+        result = cur.fetchone()
+        total_time_seconds = result[0] if result and result[0] is not None else 0
+        formatted_time = format_time(total_time_seconds)
+
+        # Get all outdoor periods for today
+        cur.execute(
+            """
+            SELECT time, "outside?" 
+            FROM updated_table
+            WHERE user_id = %s AND DATE(time) = %s
+            ORDER BY time ASC
+            """,
+            (user_id, today)
+        )
+        results = cur.fetchall()
+
+        outdoor_periods = []
+        prev_time = None
+        prev_outside = False
+
+        for record in results:
+            record_time, outside = record
+            if prev_outside and not outside:
+                # Transition from outside to inside
+                if prev_time:
+                    outdoor_periods.append((prev_time.time(), record_time.time()))
+            prev_time = record_time
+            prev_outside = outside
+
+        if prev_outside and prev_time:
+            outdoor_periods.append((prev_time.time(), datetime.now().time()))
+
+        # Convert sunrise/sunset to time objects
+        try:
+            sunrise_time = datetime.strptime(sunrise_str, "%H:%M").time()
+            sunset_time = datetime.strptime(sunset_str, "%H:%M").time()
+        except ValueError:
+            return jsonify({"error": "Invalid sunrise/sunset format (expected HH:MM)"}), 400
+
+        # Create the visualization 
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(14, 10), facecolor='#1a1a1a')
+        fig.patch.set_edgecolor('#FFA500')
+        fig.patch.set_linewidth(3)
+
+        radius = 10
+        center = (0, 0)
+        arc_width = 50
+
+        # Calculate daylight duration in seconds
+        daylight_duration = (datetime.combine(today, sunset_time) - 
+                           datetime.combine(today, sunrise_time)).total_seconds()
+        
+        # Convert time to angle (sunrise at 0°, sunset at 180°)
+        def time_to_daylight_angle(t: time) -> float:
+            
+            if t <= sunrise_time:
+                return 0
+            if t >= sunset_time:
+                return 180
+            seconds_since_sunrise = (datetime.combine(today, t) - 
+                                    datetime.combine(today, sunrise_time)).total_seconds()
+            return 180 * (seconds_since_sunrise / daylight_duration)
+
+        # Draw the base arch 
+        daylight_arc = Arc(center, 2*radius, 2*radius, angle=0, 
+                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
+        ax.add_patch(daylight_arc)
+        
+        # Draw the outdoor periods
+        for start, end in outdoor_periods:
+            # Clip outdoor periods to daylight hours
+            start_clipped = max(start, sunrise_time)
+            end_clipped = min(end, sunset_time)
+            
+            if start_clipped >= end_clipped:
+                continue  
+                
+            start_angle = time_to_daylight_angle(start_clipped)
+            end_angle = time_to_daylight_angle(end_clipped)
+            
+            outdoor_arc = Arc(center, 2*radius, 2*radius, angle=0,
+                            theta1=start_angle, theta2=end_angle,
+                            color='#FFA500', lw=arc_width)
+            ax.add_patch(outdoor_arc)
+        
+        midday_time = (datetime.combine(today, sunrise_time) + 
+                     timedelta(seconds=daylight_duration/2)).time()
+        
+        time_markers = [
+            (sunrise_time, sunrise_str),
+            (midday_time, "Midday"),
+            (sunset_time, sunset_str)
+        ]
+        
+        for time_marker, label in time_markers:
+            angle = time_to_daylight_angle(time_marker)
+
+            mirrored_angle = 180 - angle
+            x = radius * np.cos(np.radians(mirrored_angle))
+            y = radius * np.sin(np.radians(mirrored_angle))
+            
+            ha = 'center'
+            va = 'center'
+            offset_x = 0
+            offset_y = 0
+            font_size = 14
+            
+            if angle < 90:  # Left side (sunrise)
+                ha = 'left'
+                offset_x = 0.6
+            elif angle > 90:  # Right side (sunset)
+                ha = 'right'
+                offset_x = -0.6
+            else:  # Midday at top
+                va = 'bottom'
+                offset_y = 0.6
+            
+            ax.text(x + offset_x, y + offset_y, label, 
+                   color='white', ha=ha, va=va, fontsize=font_size,
+                   fontweight='bold')
+
+        ax.text(0, 5, "Recommended daylight\n exposure per day:\n45Mins-2hrs", 
+               color='white', 
+               ha='center', va='center',
+               fontsize=20,
+               fontweight='bold',
+               alpha=0.8)
+
+        # Add formatted time in the center 
+        ax.text(0, 0, formatted_time, 
+               color='#FFA500', 
+               ha='center', va='center',
+               fontsize=42,  
+               fontweight='bold',
+               bbox=dict(facecolor='#1a1a1a88', 
+                         edgecolor='#FFA500', 
+                         boxstyle='round,pad=0.8',  
+                         linewidth=3))  
+
+        ax.set_xlim(-radius-3, radius+3)
+        ax.set_ylim(0, radius+3)
+        ax.axis('off')
+        ax.set_aspect('equal')
+        
+        plt.title('Daylight Exposure', color='#FFA500', pad=30, fontsize=30, fontweight='bold')
+        
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight',
+                   facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
+        plt.close(fig)
+        buf.seek(0)
+        
+        return jsonify({
+            "image": base64.b64encode(buf.read()).decode('utf-8'),
+            "total_time_outside": formatted_time,
+            "total_seconds": total_time_seconds,
+            "sunrise": sunrise_str,
+            "sunset": sunset_str
+        }), 200
+
+    except Exception as e:
+        print(f"Error in daily visualization generation: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        plt.close('all')
+
+
+@app.route('/weekly-time-outside-graph', methods=['POST'])
+def weekly_time_outside_graph():
+    try:
+        data = request.get_json()
+        if not data or 'user_id' not in data:
+            return jsonify({"error": "user_id is required in request body"}), 400
+
+        user_id = data['user_id']
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Get start and end of current week 
         today = datetime.now().date()
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
 
-        # Query to calculate total time outside in seconds
+        # Fetch the latest record per day
         cur.execute(
             """
-            SELECT 
-                DATE("time") as date, 
-                SUM(
-                    CAST(SPLIT_PART(total_time_outside, ':', 1) AS INTEGER) * 3600 + -- Hours to seconds
-                    CAST(SPLIT_PART(total_time_outside, ':', 2) AS INTEGER) * 60 +    -- Minutes to seconds
-                    CAST(SPLIT_PART(total_time_outside, ':', 3) AS INTEGER)           -- Seconds
-                ) as total_time_outside_seconds
-            FROM updated_table
-            WHERE user_id = %s AND DATE("time") BETWEEN %s AND %s
-            GROUP BY DATE("time")
-            ORDER BY DATE("time")
+            WITH ranked_entries AS (
+                SELECT 
+                    DATE("time") as date,
+                    total_time_outside_for_given_day as time_seconds,
+                    ROW_NUMBER() OVER (PARTITION BY DATE("time") ORDER BY "time" DESC) as row_num
+                FROM updated_table
+                WHERE user_id = %s AND DATE("time") BETWEEN %s AND %s
+            )
+            SELECT date, time_seconds
+            FROM ranked_entries
+            WHERE row_num = 1
+            ORDER BY date
             """,
             (user_id, start_of_week, end_of_week)
         )
         results = cur.fetchall()
 
-        cur.close()
-        conn.close()
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        days = []
+        values = []
+        existing_data = {}
+        
+        # Store seconds 
+        for date, time_seconds in results:
+            existing_data[date] = time_seconds if time_seconds is not None else 0
 
-        # Format the results to include the day of the week
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        weekly_data = []
-        for result in results:
-            date = result[0]
-            day_of_week = date.weekday()  # Get the day of the week as an integer (0 = Monday, 6 = Sunday)
-            day_name = day_names[day_of_week]  # Convert to day name
-            total_time_outside = result[1]  # Total time outside in seconds
+        # Generate all days of the week
+        for day_offset in range(7):
+            current_date = start_of_week + timedelta(days=day_offset)
+            days.append(day_names[day_offset])
+            # Convert seconds to hours 
+            values.append(existing_data.get(current_date, 0) / 3600)
 
-            weekly_data.append({
-                "day": day_name,
-                "total_time_outside": total_time_outside
-            })
+        plt.style.use('dark_background')
+        
+        # Create figure with custom styling
+        fig = plt.figure(figsize=(10, 6), facecolor='#1a1a1a')
+        fig.patch.set_edgecolor('#FFA500')
+        fig.patch.set_linewidth(2)
+        
 
-        return jsonify(weekly_data), 200
+        ax = fig.add_subplot(111, facecolor='#2a2a2a')
+        
+        from matplotlib.patches import FancyBboxPatch
+        box = FancyBboxPatch((0.02, 0.02), 0.96, 0.96,
+                            boxstyle="round,pad=0.03",
+                            ec="#FFA500", fc="#2a2a2a", lw=1.5,
+                            alpha=0.8, transform=ax.transAxes, zorder=0)
+        ax.add_patch(box)
+        
+        # Create orange-yellow gradient bars
+        bar_colors = ['#FF8C00', '#FFA500', '#FFB732', '#FFC966', '#FFDB99', '#FFEDCC', '#FFFFE0']
+        bars = ax.bar(days, values, color=bar_colors, edgecolor='#FFA500', 
+                     linewidth=1.5, alpha=0.9, width=0.7, zorder=3)
+        
+        # Add subtle glow effect to bars
+        for bar in bars:
+            bar.set_path_effects([
+                patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
+                patheffects.Normal()
+            ])
+        
+        ax.set_title('Weekly Time Spent Outside', 
+                    color='#FFA500', 
+                    pad=25, 
+                    fontsize=16, 
+                    fontweight='bold',
+                    fontfamily='sans-serif',
+                    loc='center')
+        
+        # Customize y-axis
+        ax.set_ylabel('Hours Outside', 
+                     color='#FFA500', 
+                     fontsize=12, 
+                     labelpad=15,
+                     fontfamily='sans-serif')
+        
+        # Set y-axis limit with some padding
+        y_max = max(values) * 1.3 if max(values) > 0 else 5
+        ax.set_ylim(0, y_max)
+        
+        # Customize x-axis
+        ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
+        ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
+        
+        # Customize grid
+        ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
+        
+        # Add value labels with custom styling
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                       f'{height:.1f}h',
+                       ha='center', va='bottom',
+                       color='#FFA500', 
+                       fontsize=11,
+                       fontweight='bold',
+                       bbox=dict(facecolor='#1a1a1a', 
+                                edgecolor='#FFA500', 
+                                boxstyle='round,pad=0.3',
+                                alpha=0.8),
+                       zorder=4)
+
+        # Add custom x-axis line
+        ax.axhline(0, color='#FFA500', linestyle='-', linewidth=1.5, zorder=2)
+        
+        # Make spines invisible
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        
+        # Adjust layout to prevent clipping
+        plt.tight_layout(pad=3)
+
+        # Save to buffer
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', 
+                   facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
+        plt.close(fig)
+        buf.seek(0)
+        
+        return jsonify({
+            "image": base64.b64encode(buf.read()).decode('utf-8'),
+            "days": days,
+            "hours": values,
+            "seconds": [int(v * 3600) for v in values]  
+        }), 200
+
     except Exception as e:
-        print(f"Error in /weekly-time-outside: {str(e)}")
-        return jsonify({"error": f"Database error: {str(e)}"}), 500
+        print(f"Error in weekly graph generation: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        plt.close('all')
 
 @app.route('/check-location', methods=['POST'])
-def check_location():
-    data = request.json
-    user_id = data.get('user_id')
-    gps_accuracy = data.get('gps_accuracy')
-    is_connected_to_wifi = data.get('is_connected_to_wifi', False)  # Default to False if not provided
-    weather = data.get('weather', 'Unknown')  # Get weather data from the app
-    temperature = data.get('temperature', None)  # Get temperature
-    uv = data.get('uv', None)  # Get UV index
-    sunrise = data.get('sunrise')  # Get sunrise time (24-hour format)
-    sunset = data.get('sunset')  # Get sunset time (24-hour format)
+def check_location() -> Tuple[Dict[str, Any], int]:
+    
+    MAX_TIME_BETWEEN_UPDATES = 600  
 
-    if user_id is None or gps_accuracy is None:
-        return jsonify({"error": "user_id and GPS accuracy are required"}), 400
+    # Input validation
+    data = request.get_json()
+    if not data:
+        return {"error": "Request must be JSON"}, 400
 
-    # Round GPS accuracy to 2 decimal places
-    gps_accuracy = round(gps_accuracy, 2)
+    required_fields = ['user_id', 'gps_accuracy']
+    if not all(field in data for field in required_fields):
+        return {"error": f"Missing required fields: {required_fields}"}, 400
 
-    # Determine if the user is outside
-    is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD
+    # Set defaults
+    is_connected_to_wifi = data.get('is_connected_to_wifi', False)
+    weather = data.get('weather', 'Unknown')
+    temperature = data.get('temperature')
+    uv = data.get('uv')
+    sunrise = data.get('sunrise')
+    sunset = data.get('sunset')
+    gps_accuracy = round(float(data['gps_accuracy']), 2)
 
-    # If the user is connected to Wi-Fi, assume they are inside
-    if is_connected_to_wifi:
-        is_outside = False
-
-    # Get current date and time
-    current_datetime = get_current_datetime()
-
-    # Calculate time_outside if transitioning from outside to inside
-    time_outside = 0
-    if not is_outside:
-        time_outside = calculate_time_outside(user_id)
-
-    # Check if it is after sunset and the user was outside before sunset
-    if sunset and is_outside:
-        sunset_time = datetime.strptime(sunset, "%H:%M").time()
-        current_time = datetime.now().time()
-        if current_time > sunset_time:
-            # Fetch the last entry to check if the user was outside before sunset
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT "time", "outside?" FROM updated_table
-                    WHERE user_id = %s
-                    ORDER BY "time" DESC
-                    LIMIT 1
-                    """,
-                    (user_id,)
-                )
-                result = cur.fetchone()
-                if result:
-                    last_time, last_outside_status = result
-                    if last_outside_status:  # User was outside before sunset
-                        # Calculate time spent outside until sunset
-                        sunset_datetime = datetime.combine(datetime.now().date(), sunset_time)
-                        time_outside = (sunset_datetime - last_time).total_seconds()
-
-                        # Mark the user as inside for the final entry
-                        is_outside = False
-
-                        # Format time_outside
-                        time_outside_formatted = format_time(time_outside, separator=":")
-
-                        # Insert the final entry for the day
-                        cur.execute(
-                            """
-                            INSERT INTO updated_table (
-                                user_id, total_time_outside, time, total_available_hours,
-                                total_time_outside_for_given_day, "outside?", weather, time_outside, temperature, uv
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                user_id, time_outside_formatted, current_datetime, 0,  # total_available_hours is 0 after sunset
-                                time_outside_formatted, is_outside, weather, time_outside_formatted, temperature, uv
-                            )
-                        )
-                        conn.commit()
-                        cur.close()
-                        conn.close()
-
-                        # Return response for the final entry
-                        return jsonify({
-                            "message": "Final entry for the day: User marked as inside after sunset.",
-                            "is_outside": is_outside,
-                            "weather": weather,
-                            "time_outside": time_outside_formatted,
-                            "temperature": temperature,
-                            "uv": uv
-                        }), 200
-            except Exception as e:
-                return jsonify({"error": f"Database error: {str(e)}"}), 500
-
-    # Format time_outside
-    time_outside_formatted = format_time(time_outside, separator=":")  # Format as hrs:mins:secs
-
-    # Check if it is daytime
-    if sunrise and sunset:
-        if not is_daytime(sunrise, sunset):
-            return jsonify({
-                "message": "It is not daytime. Data will not be saved to the database.",
-                "is_outside": is_outside,
-                "weather": weather,
-                "time_outside": time_outside_formatted,
-                "temperature": temperature,
-                "uv": uv
-            })
-
-    # Calculate available daylight hours
-    total_available_hours = calculate_available_hours(sunrise, sunset)
-
-    # Insert data into the database (only if it is daytime)
     try:
+        # Daytime check
+        if sunrise and sunset and not is_daytime(sunrise, sunset):
+            return {"message": "Data collection paused during nighttime"}, 200
+
+        # Determine outdoor status
+        current_datetime = datetime.now()
+        is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD and not is_connected_to_wifi
+
+        # Get previous record
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Fetch the latest total_time_outside and total_time_outside_for_given_day for the user
         cur.execute(
             """
-            SELECT time, total_time_outside, total_time_outside_for_given_day FROM updated_table
-            WHERE user_id = %s
-            ORDER BY "time" DESC
+            SELECT time, "outside?", time_outside, total_time_outside, total_time_outside_for_given_day 
+            FROM updated_table 
+            WHERE user_id = %s 
+            ORDER BY time DESC 
             LIMIT 1
             """,
-            (user_id,)
+            (data['user_id'],)
         )
-        result = cur.fetchone()
-        total_time_outside_seconds = 0
-        total_time_outside_for_given_day_seconds = 0
-        if result:
-            last_time = result[0]
-            last_total_time_outside = result[1]
-            last_total_time_outside_for_given_day = result[2]
+        last_record = cur.fetchone()
 
-            # Convert formatted time strings back to seconds
-            def time_to_seconds(time_str):
-                h, m, s = map(int, time_str.split(":"))
-                return h * 3600 + m * 60 + s
+        # Time calculation logic
+        if is_outside and last_record and last_record[1]:  # Still outside
+            time_since_last = (current_datetime - last_record[0]).total_seconds()
+            incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
+            time_outside = last_record[2] + incremental_time
+            total_time_outside = last_record[3] + incremental_time
+            total_time_outside_for_given_day = last_record[4] + incremental_time
 
-            total_time_outside_seconds = time_to_seconds(last_total_time_outside)
-            total_time_outside_for_given_day_seconds = time_to_seconds(last_total_time_outside_for_given_day)
+        elif not is_outside and last_record and last_record[1]:  # Transition to inside
+            time_outside = min((current_datetime - last_record[0]).total_seconds(), MAX_TIME_BETWEEN_UPDATES)
+            total_time_outside = last_record[3] + time_outside
+            total_time_outside_for_given_day = last_record[4] + time_outside
 
-            current_date = datetime.now().date()
-            last_date = last_time.date()
-            if current_date != last_date:
-                # Reset total_time_outside_for_given_day for the new day
-                total_time_outside_for_given_day_seconds = time_outside
-            else:
-                # Add to the existing total_time_outside_for_given_day
-                total_time_outside_for_given_day_seconds += time_outside
+        else:  # New session
+            time_outside = 0
+            total_time_outside = last_record[3] if last_record else 0
+            total_time_outside_for_given_day = last_record[4] if last_record else 0
 
-        # Add to the cumulative total_time_outside
-        total_time_outside_seconds += time_outside
+        # Sunset transition handling
+        if sunset and is_outside:
+            sunset_time = datetime.strptime(sunset, "%H:%M").time()
+            if current_datetime.time() > sunset_time:
+                is_outside = False
+                time_outside = min((datetime.combine(current_datetime.date(), sunset_time) - last_record[0]).total_seconds(),
+                                 MAX_TIME_BETWEEN_UPDATES)
 
-        # Format total_time_outside and total_time_outside_for_given_day
-        total_time_outside_formatted = format_time(total_time_outside_seconds, separator=":")
-        total_time_outside_for_given_day_formatted = format_time(total_time_outside_for_given_day_seconds, separator=":")
 
-        # Insert the new record
+        # Calculate available daylight hours
+        total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
+
+
         cur.execute(
             """
             INSERT INTO updated_table (
-                user_id, total_time_outside, time, total_available_hours,
-                total_time_outside_for_given_day, "outside?", weather, time_outside, temperature, uv
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                user_id, time, gps_accuracy, "outside?", 
+                time_outside, total_time_outside, total_time_outside_for_given_day,
+                total_available_hours, weather, temperature, uv
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                user_id, total_time_outside_formatted, current_datetime, total_available_hours,
-                total_time_outside_for_given_day_formatted, is_outside, weather, time_outside_formatted, temperature, uv
+                data['user_id'], current_datetime, gps_accuracy, is_outside,
+                time_outside, total_time_outside, total_time_outside_for_given_day,
+                total_available_hours, weather, temperature, uv
             )
         )
         conn.commit()
-        cur.close()
-        conn.close()
+
+        return {
+            "is_outside": is_outside,
+            "gps_accuracy": gps_accuracy,
+            "time_outside": time_outside,
+            "total_time_outside": total_time_outside,
+            "total_time_outside_for_given_day": total_time_outside_for_given_day,
+            "weather": weather,
+            "temperature": temperature,
+            "uv": uv
+        }, 200
+
     except Exception as e:
-        return jsonify({"error": f"Database error: {str(e)}"}), 500
-
-    # Include the latest data in the response
-    response_data = {
-        "is_outside": is_outside,
-        "weather": weather,
-        "time_outside": time_outside_formatted,
-        "total_time_outside": total_time_outside_formatted,
-        "total_time_outside_for_given_day": total_time_outside_for_given_day_formatted,
-        "temperature": temperature,
-        "uv": uv,
-        "total_available_hours": total_available_hours,
-        "gps_accuracy": gps_accuracy  # Include the rounded GPS accuracy in the response
-    }
-
-    return jsonify(response_data)
+        return {"error": str(e)}, 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
-
-# python -m flask run --host=0.0.0.0
-
-#curl -X POST http://192.168.68.103:5000/check-location -H "Content-Type: application/json" -d "{\"user_id\": \"user123\", \"gps_accuracy\": 20, \"is_connected_to_wifi\": false, \"weather\": \"Sunny\"}"
+    app.run(host='0.0.0.0', port=5000, debug=True)
