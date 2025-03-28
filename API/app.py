@@ -45,10 +45,10 @@ def calculate_time_outside(user_id: str) -> int:
 
         cur.execute(
             """
-            SELECT "time" FROM updated_table
+            SELECT "time" FROM final_table
             WHERE user_id = %s AND "outside?" = TRUE
             AND "time" > COALESCE(
-                (SELECT "time" FROM updated_table
+                (SELECT "time" FROM final_table
                  WHERE user_id = %s AND "outside?" = FALSE
                  AND DATE("time") = %s
                  ORDER BY "time" DESC
@@ -150,7 +150,7 @@ def daily_visualization():
         # Get today's total time outside
         cur.execute(
             """
-            SELECT total_time_outside_for_given_day FROM updated_table
+            SELECT total_time_outside_for_given_day FROM final_table
             WHERE user_id = %s AND DATE(time) = %s
             ORDER BY time DESC
             LIMIT 1
@@ -165,7 +165,7 @@ def daily_visualization():
         cur.execute(
             """
             SELECT time, "outside?" 
-            FROM updated_table
+            FROM final_table
             WHERE user_id = %s AND DATE(time) = %s
             ORDER BY time ASC
             """,
@@ -352,7 +352,7 @@ def weekly_time_outside_graph():
                     DATE("time") as date,
                     total_time_outside_for_given_day as time_seconds,
                     ROW_NUMBER() OVER (PARTITION BY DATE("time") ORDER BY "time" DESC) as row_num
-                FROM updated_table
+                FROM final_table
                 WHERE user_id = %s AND DATE("time") BETWEEN %s AND %s
             )
             SELECT date, time_seconds
@@ -521,7 +521,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         cur.execute(
             """
             SELECT time, "outside?", time_outside, total_time_outside, total_time_outside_for_given_day 
-            FROM updated_table 
+            FROM final_table 
             WHERE user_id = %s 
             ORDER BY time DESC 
             LIMIT 1
@@ -563,16 +563,16 @@ def check_location() -> Tuple[Dict[str, Any], int]:
 
         cur.execute(
             """
-            INSERT INTO updated_table (
-                user_id, time, gps_accuracy, "outside?", 
+            INSERT INTO final_table (
+                user_id, time, "outside?", 
                 time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv
+                total_available_hours, weather, temperature, uv,gps_accuracy
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                data['user_id'], current_datetime, gps_accuracy, is_outside,
+                data['user_id'], current_datetime, is_outside,
                 time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv
+                total_available_hours, weather, temperature, uv,gps_accuracy
             )
         )
         conn.commit()
@@ -597,3 +597,8 @@ def check_location() -> Tuple[Dict[str, Any], int]:
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+
+# python -m flask run --host=0.0.0.0
+
+# curl -X POST http://192.168.68.103:5000/check-location -H "Content-Type: application/json" -d "{\"user_id\": \"user123\", \"gps_accuracy\": 20, \"is_connected_to_wifi\": false, \"weather\": \"Sunny\"}"
