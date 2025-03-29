@@ -125,8 +125,8 @@ def submit_feedback() -> Tuple[Dict[str, Any], int]:
         if 'conn' in locals():
             conn.close()
 
-@app.route('/daily-visualization', methods=['POST'])
-def daily_visualization():
+@app.route('/daily-visualisation', methods=['POST'])
+def daily_visualisation():
     try:
         data = request.get_json()
         if not data or 'user_id' not in data:
@@ -210,23 +210,22 @@ def daily_visualization():
         daylight_duration = (datetime.combine(today, sunset_time) - 
                            datetime.combine(today, sunrise_time)).total_seconds()
         
-        # Convert time to angle (sunrise at 0°, sunset at 180°)
+        # Convert time to angle (sunrise at 180°, sunset at 0°)
         def time_to_daylight_angle(t: time) -> float:
-            
             if t <= sunrise_time:
-                return 0
-            if t >= sunset_time:
                 return 180
+            if t >= sunset_time:
+                return 0
             seconds_since_sunrise = (datetime.combine(today, t) - 
                                     datetime.combine(today, sunrise_time)).total_seconds()
-            return 180 * (seconds_since_sunrise / daylight_duration)
+            return 180 - (180 * (seconds_since_sunrise / daylight_duration))
 
-        # Draw the base arch 
+        # Draw the base arch (dark grey)
         daylight_arc = Arc(center, 2*radius, 2*radius, angle=0, 
-                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
+                          theta1=0, theta2=180, color='#333333', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw the outdoor periods
+        # Draw the outdoor periods (orange/yellow)
         for start, end in outdoor_periods:
             # Clip outdoor periods to daylight hours
             start_clipped = max(start, sunrise_time)
@@ -254,10 +253,8 @@ def daily_visualization():
         
         for time_marker, label in time_markers:
             angle = time_to_daylight_angle(time_marker)
-
-            mirrored_angle = 180 - angle
-            x = radius * np.cos(np.radians(mirrored_angle))
-            y = radius * np.sin(np.radians(mirrored_angle))
+            x = radius * np.cos(np.radians(angle))
+            y = radius * np.sin(np.radians(angle))
             
             ha = 'center'
             va = 'center'
@@ -265,12 +262,12 @@ def daily_visualization():
             offset_y = 0
             font_size = 14
             
-            if angle < 90:  # Left side (sunrise)
-                ha = 'left'
-                offset_x = 0.6
-            elif angle > 90:  # Right side (sunset)
+            if angle > 90:  # Left side (sunrise)
                 ha = 'right'
                 offset_x = -0.6
+            elif angle < 90:  # Right side (sunset)
+                ha = 'left'
+                offset_x = 0.6
             else:  # Midday at top
                 va = 'bottom'
                 offset_y = 0.6
@@ -326,7 +323,6 @@ def daily_visualization():
             conn.close()
         plt.close('all')
 
-
 @app.route('/weekly-time-outside-graph', methods=['POST'])
 def weekly_time_outside_graph():
     try:
@@ -369,7 +365,7 @@ def weekly_time_outside_graph():
         values = []
         existing_data = {}
         
-        # Store seconds 
+        # Store seconds
         for date, time_seconds in results:
             existing_data[date] = time_seconds if time_seconds is not None else 0
 
@@ -397,9 +393,8 @@ def weekly_time_outside_graph():
                             alpha=0.8, transform=ax.transAxes, zorder=0)
         ax.add_patch(box)
         
-        # Create orange-yellow gradient bars
-        bar_colors = ['#FF8C00', '#FFA500', '#FFB732', '#FFC966', '#FFDB99', '#FFEDCC', '#FFFFE0']
-        bars = ax.bar(days, values, color=bar_colors, edgecolor='#FFA500', 
+        
+        bars = ax.bar(days, values, color='#FFA500', edgecolor='#FFA500', 
                      linewidth=1.5, alpha=0.9, width=0.7, zorder=3)
         
         # Add subtle glow effect to bars
