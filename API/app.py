@@ -325,7 +325,6 @@ def daily_visualization():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
-
 @app.route('/weekly-time-outside-graph', methods=['POST'])
 def weekly_time_outside_graph():
     try:
