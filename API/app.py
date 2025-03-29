@@ -470,7 +470,6 @@ def weekly_time_outside_graph():
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
-    
     MAX_TIME_BETWEEN_UPDATES = 600  
 
     # Input validation
@@ -498,6 +497,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
 
         # Determine outdoor status
         current_datetime = datetime.now()
+        current_date = current_datetime.date()
         is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD and not is_connected_to_wifi
 
         # Get previous record
@@ -515,23 +515,35 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         )
         last_record = cur.fetchone()
 
+        # Initialize time variables
+        time_outside = 0
+        total_time_outside = last_record[3] if last_record else 0
+        
+        # Check if it's a new day
+        if last_record:
+            last_date = last_record[0].date()
+            if current_date > last_date:
+                # New day - reset daily total
+                total_time_outside_for_given_day = 0
+            else:
+                # Same day - use previous daily total
+                total_time_outside_for_given_day = last_record[4] if last_record else 0
+        else:
+            # No previous records - start fresh
+            total_time_outside_for_given_day = 0
+
         # Time calculation logic
         if is_outside and last_record and last_record[1]:  # Still outside
             time_since_last = (current_datetime - last_record[0]).total_seconds()
             incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
             time_outside = last_record[2] + incremental_time
             total_time_outside = last_record[3] + incremental_time
-            total_time_outside_for_given_day = last_record[4] + incremental_time
+            total_time_outside_for_given_day += incremental_time
 
         elif not is_outside and last_record and last_record[1]:  # Transition to inside
             time_outside = min((current_datetime - last_record[0]).total_seconds(), MAX_TIME_BETWEEN_UPDATES)
             total_time_outside = last_record[3] + time_outside
-            total_time_outside_for_given_day = last_record[4] + time_outside
-
-        else:  # New session
-            time_outside = 0
-            total_time_outside = last_record[3] if last_record else 0
-            total_time_outside_for_given_day = last_record[4] if last_record else 0
+            total_time_outside_for_given_day += time_outside
 
         # Sunset transition handling
         if sunset and is_outside:
@@ -541,23 +553,21 @@ def check_location() -> Tuple[Dict[str, Any], int]:
                 time_outside = min((datetime.combine(current_datetime.date(), sunset_time) - last_record[0]).total_seconds(),
                                  MAX_TIME_BETWEEN_UPDATES)
 
-
         # Calculate available daylight hours
         total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
-
 
         cur.execute(
             """
             INSERT INTO final_table (
                 user_id, time, "outside?", 
                 time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv,gps_accuracy
+                total_available_hours, weather, temperature, uv, gps_accuracy
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 data['user_id'], current_datetime, is_outside,
                 time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv,gps_accuracy
+                total_available_hours, weather, temperature, uv, gps_accuracy
             )
         )
         conn.commit()
@@ -578,7 +588,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
     finally:
         if 'conn' in locals():
             conn.close()
-
+            
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
