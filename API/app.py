@@ -337,8 +337,8 @@ def weekly_time_outside_graph():
 
         # Get start and end of current week 
         today = datetime.now().date()
-        start_of_week = today - timedelta(days=today.weekday())
-        end_of_week = start_of_week + timedelta(days=6)
+        start_of_week = today - timedelta(days=today.weekday())  # Monday
+        end_of_week = start_of_week + timedelta(days=6)  # Sunday
 
         # Fetch the latest record per day
         cur.execute(
@@ -361,83 +361,113 @@ def weekly_time_outside_graph():
         results = cur.fetchall()
 
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        days = []
-        values = []
-        existing_data = {}
+        days = day_names  # We want all days of week displayed
+        values = [0] * 7  # Initialize with zeros for all days
         
-        # Store seconds
+        # Create a dictionary to map dates to their weekday index (0=Monday, 6=Sunday)
+        date_to_weekday = {}
+        for i in range(7):
+            current_date = start_of_week + timedelta(days=i)
+            date_to_weekday[current_date] = i
+
+        # Populate values with data from database
         for date, time_seconds in results:
-            existing_data[date] = time_seconds if time_seconds is not None else 0
+            if date in date_to_weekday:
+                weekday_index = date_to_weekday[date]
+                values[weekday_index] = (time_seconds / 3600) if time_seconds is not None else 0
 
-        # Generate all days of the week
-        for day_offset in range(7):
-            current_date = start_of_week + timedelta(days=day_offset)
-            days.append(day_names[day_offset])
-            # Convert seconds to hours 
-            values.append(existing_data.get(current_date, 0) / 3600)
-
-        # Create figure with explicit DPI and size
         plt.style.use('dark_background')
-        fig = plt.figure(figsize=(10, 6), dpi=100, facecolor='#1a1a1a')
+        
+        # Create figure with custom styling
+        fig = plt.figure(figsize=(10, 6), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
         fig.patch.set_linewidth(2)
         
         ax = fig.add_subplot(111, facecolor='#2a2a2a')
         
-        # Create a solid background patch first
-        bg_patch = plt.Rectangle((0, 0), 1, 1, transform=ax.transAxes,
-                                facecolor='#2a2a2a', zorder=0)
-        ax.add_patch(bg_patch)
-
-        # Create bars using standard bar function but with explicit zorder
-        bars = ax.bar(days, values, color='#FFA500', width=0.7, 
-                     edgecolor='#FFA500', linewidth=1.5, alpha=0.9,
-                     zorder=3)
+        from matplotlib.patches import FancyBboxPatch
+        box = FancyBboxPatch((0.02, 0.02), 0.96, 0.96,
+                            boxstyle="round,pad=0.03",
+                            ec="#FFA500", fc="#2a2a2a", lw=1.5,
+                            alpha=0.8, transform=ax.transAxes, zorder=0)
+        ax.add_patch(box)
         
-        # Add glow effect
-        for bar in bars:
+        # Create bars with rounded tops for each day
+        bar_width = 0.7
+        for i, (day, value) in enumerate(zip(days, values)):
+            # Create the main bar
+            bar = plt.Rectangle((i - bar_width/2, 0), bar_width, value, 
+                              color='#FFA500', alpha=0.9, zorder=3)
+            ax.add_patch(bar)
+            
+            # Create rounded top if there's a value
+            if value > 0:
+                from matplotlib.patches import Ellipse
+                cap = Ellipse((i, value), width=bar_width, height=bar_width*0.4,
+                            color='#FFA500', alpha=0.9, zorder=3)
+                ax.add_patch(cap)
+            
+            # Add glow effect
             bar.set_path_effects([
                 patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
                 patheffects.Normal()
             ])
-
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                       f'{height:.1f}h',
-                       ha='center', va='bottom',
-                       color='#FFA500', 
-                       fontsize=11,
-                       fontweight='bold',
-                       bbox=dict(facecolor='#1a1a1a', 
-                                edgecolor='#FFA500', 
-                                boxstyle='round,pad=0.3',
-                                alpha=0.8),
-                       zorder=4)
-
-        # Configure axes
+            
+            # Add value labels (even for zero values)
+            ax.text(i, value + 0.1,
+                   f'{value:.1f}h',
+                   ha='center', va='bottom',
+                   color='#FFA500', 
+                   fontsize=11,
+                   fontweight='bold',
+                   bbox=dict(facecolor='#1a1a1a', 
+                            edgecolor='#FFA500', 
+                            boxstyle='round,pad=0.3',
+                            alpha=0.8),
+                   zorder=4)
+        
         ax.set_title('Weekly Time Spent Outside', 
                     color='#FFA500', 
                     pad=25, 
                     fontsize=16, 
-                    fontweight='bold')
+                    fontweight='bold',
+                    fontfamily='sans-serif',
+                    loc='center')
         
-        ax.set_ylabel('Hours Outside', color='#FFA500', fontsize=12)
-        ax.tick_params(axis='x', colors='#FFA500')
-        ax.tick_params(axis='y', colors='#FFA500')
+        # Customize y-axis
+        ax.set_ylabel('Hours Outside', 
+                     color='#FFA500', 
+                     fontsize=12, 
+                     labelpad=15,
+                     fontfamily='sans-serif')
         
-        # Set explicit limits
-        ax.set_ylim(0, max(values) * 1.3 if max(values) > 0 else 5)
+        # Set y-axis limit with some padding
+        y_max = max(values) * 1.3 if max(values) > 0 else 5
+        ax.set_ylim(0, y_max)
         
-        # Force a draw before saving
-        fig.canvas.draw()
+        # Customize x-axis to show all days
+        ax.set_xticks(range(len(days)))
+        ax.set_xticklabels(days)
+        ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
+        ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
+        
+        # Customize grid
+        ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
+        
+        # Add custom x-axis line
+        ax.axhline(0, color='#FFA500', linestyle='-', linewidth=1.5, zorder=2)
+        
+        # Make spines invisible
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        
+        # Adjust layout to prevent clipping
+        plt.tight_layout(pad=3)
 
-        # Save to buffer with explicit bbox_inches
+        # Save to buffer
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight',
-                   pad_inches=0.1, facecolor=fig.get_facecolor())
+        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', 
+                   facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
         plt.close(fig)
         buf.seek(0)
         
@@ -445,7 +475,8 @@ def weekly_time_outside_graph():
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "days": days,
             "hours": values,
-            "seconds": [int(v * 3600) for v in values]  
+            "seconds": [int(v * 3600) for v in values],
+            "message": f"Weekly data from {start_of_week} to {end_of_week}"
         }), 200
 
     except Exception as e:
@@ -455,6 +486,7 @@ def weekly_time_outside_graph():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
+
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
