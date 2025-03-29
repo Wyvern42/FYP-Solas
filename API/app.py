@@ -385,39 +385,26 @@ def weekly_time_outside_graph():
         
         ax = fig.add_subplot(111, facecolor='#2a2a2a')
         
-        from matplotlib.patches import FancyBboxPatch
-        box = FancyBboxPatch((0.02, 0.02), 0.96, 0.96,
-                            boxstyle="round,pad=0.03",
-                            ec="#FFA500", fc="#2a2a2a", lw=1.5,
-                            alpha=0.8, transform=ax.transAxes, zorder=0)
-        ax.add_patch(box)
-        
-        # Create rounded bars using Rectangle patches
+        # Create rounded bars using FancyBboxPatch
         bar_width = 0.7
         for i, (day, value) in enumerate(zip(days, values)):
-            # Create the main rectangular part of the bar
-            rect = plt.Rectangle((i - bar_width/2, 0), bar_width, value, 
-                               color='#FFA500', alpha=0.9, zorder=3)
+            # Create the rounded rectangle for each bar
+            rect = FancyBboxPatch((i - bar_width/2, 0), bar_width, value,
+                                boxstyle=f"round,pad=0.1,rounding_size=0.2",
+                                ec="#FFA500", fc="#FFA500", lw=1.5,
+                                alpha=0.9, zorder=3)
             ax.add_patch(rect)
             
-            # Create a rounded cap on top of the bar
-            cap_radius = bar_width * 0.2
-            cap = plt.Rectangle((i - bar_width/2, value - cap_radius), 
-                              bar_width, cap_radius * 2,
-                              color='#FFA500', alpha=0.9, zorder=3,
-                              linewidth=0,
-                              capstyle='round')
-            ax.add_patch(cap)
-            
-            # Add subtle glow effect to bars
+            # Add subtle glow effect
             rect.set_path_effects([
                 patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
                 patheffects.Normal()
             ])
-            cap.set_path_effects([
-                patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
-                patheffects.Normal()
-            ])
+
+        # Set x-ticks and limits
+        ax.set_xticks(range(len(days)))
+        ax.set_xticklabels(days)
+        ax.set_xlim(-0.5, len(days)-0.5)
         
         ax.set_title('Weekly Time Spent Outside', 
                     color='#FFA500', 
@@ -438,21 +425,22 @@ def weekly_time_outside_graph():
         y_max = max(values) * 1.3 if max(values) > 0 else 5
         ax.set_ylim(0, y_max)
         
-        # Customize x-axis
-        ax.set_xticks(range(len(days)))
-        ax.set_xticklabels(days)
+        # Customize axes
         ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
         ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
         
         # Customize grid
         ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
-        
+
         # Add custom x-axis line
         ax.axhline(0, color='#FFA500', linestyle='-', linewidth=1.5, zorder=2)
         
         # Make spines invisible
         for spine in ax.spines.values():
             spine.set_visible(False)
+        
+        # Ensure the plot is drawn by explicitly drawing it
+        fig.canvas.draw()
         
         # Adjust layout to prevent clipping
         plt.tight_layout(pad=3)
@@ -478,6 +466,7 @@ def weekly_time_outside_graph():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
+
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
