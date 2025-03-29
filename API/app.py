@@ -355,9 +355,6 @@ def weekly_time_outside_graph():
             capstyle='round'  
         )
         
-        
-        for bar in bars:
-            bar.set_solid_capstyle('round')
 
         ax.set_title('Weekly Time Spent Outside', 
                     color='#FFA500', 
