@@ -383,7 +383,6 @@ def weekly_time_outside_graph():
         fig.patch.set_edgecolor('#FFA500')
         fig.patch.set_linewidth(2)
         
-
         ax = fig.add_subplot(111, facecolor='#2a2a2a')
         
         from matplotlib.patches import FancyBboxPatch
@@ -393,49 +392,33 @@ def weekly_time_outside_graph():
                             alpha=0.8, transform=ax.transAxes, zorder=0)
         ax.add_patch(box)
         
-        
-        bars = ax.bar(days, values, color='#FFA500', edgecolor='#FFA500', 
-                     linewidth=1.5, alpha=0.9, width=0.7, zorder=3)
-        
-        # Add subtle glow effect to bars
-        for bar in bars:
-            bar.set_path_effects([
-                patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
-                patheffects.Normal()
-            ])
-        
-        ax.set_title('Weekly Time Spent Outside', 
-                    color='#FFA500', 
-                    pad=25, 
-                    fontsize=16, 
-                    fontweight='bold',
-                    fontfamily='sans-serif',
-                    loc='center')
-        
-        # Customize y-axis
-        ax.set_ylabel('Hours Outside', 
-                     color='#FFA500', 
-                     fontsize=12, 
-                     labelpad=15,
-                     fontfamily='sans-serif')
-        
-        # Set y-axis limit with some padding
-        y_max = max(values) * 1.3 if max(values) > 0 else 5
-        ax.set_ylim(0, y_max)
-        
-        # Customize x-axis
-        ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
-        ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
-        
-        # Customize grid
-        ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
-        
-        # Add value labels with custom styling
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                       f'{height:.1f}h',
+        # Create bars with rounded tops using a combination of Rectangle and FancyBboxPatch
+        bar_width = 0.7
+        for i, (day, value) in enumerate(zip(days, values)):
+            # Create the main bar body
+            rect = plt.Rectangle((i - bar_width/2, 0), bar_width, max(0, value - 0.1), 
+                               color='#FFA500', alpha=0.9, zorder=3)
+            ax.add_patch(rect)
+            
+            # Create rounded top if value > 0
+            if value > 0:
+                rounded_top = FancyBboxPatch((i - bar_width/2, max(0, value - 0.2)), 
+                                    bar_width, 0.2,
+                                    boxstyle=f"round,pad=0.05,rounding_size=0.2",
+                                    ec="none", fc='#FFA500', alpha=0.9, zorder=3)
+                ax.add_patch(rounded_top)
+            
+            # Add glow effect to both parts
+            for patch in [rect, rounded_top] if value > 0 else [rect]:
+                patch.set_path_effects([
+                    patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
+                    patheffects.Normal()
+                ])
+            
+            # Add value labels
+            if value > 0:
+                ax.text(i, value + 0.1,
+                       f'{value:.1f}h',
                        ha='center', va='bottom',
                        color='#FFA500', 
                        fontsize=11,
@@ -445,17 +428,40 @@ def weekly_time_outside_graph():
                                 boxstyle='round,pad=0.3',
                                 alpha=0.8),
                        zorder=4)
-
-        # Add custom x-axis line
+        
+        # Set axis limits and labels
+        ax.set_xlim(-0.5, len(days)-0.5)
+        y_max = max(values) * 1.3 if max(values) > 0 else 5
+        ax.set_ylim(0, y_max)
+        
+        ax.set_title('Weekly Time Spent Outside', 
+                    color='#FFA500', 
+                    pad=25, 
+                    fontsize=16, 
+                    fontweight='bold',
+                    fontfamily='sans-serif',
+                    loc='center')
+        
+        ax.set_ylabel('Hours Outside', 
+                     color='#FFA500', 
+                     fontsize=12, 
+                     labelpad=15,
+                     fontfamily='sans-serif')
+        
+        ax.set_xticks(range(len(days)))
+        ax.set_xticklabels(days)
+        ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
+        ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
+        
+        ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
         ax.axhline(0, color='#FFA500', linestyle='-', linewidth=1.5, zorder=2)
         
-        # Make spines invisible
         for spine in ax.spines.values():
             spine.set_visible(False)
         
-        # Adjust layout to prevent clipping
-        plt.tight_layout(pad=3)
-
+        # Force a draw before saving to ensure all elements are rendered
+        fig.canvas.draw()
+        
         # Save to buffer
         buf = BytesIO()
         fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', 
