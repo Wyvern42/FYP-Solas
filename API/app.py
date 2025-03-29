@@ -337,8 +337,8 @@ def weekly_time_outside_graph():
 
         # Get start and end of current week 
         today = datetime.now().date()
-        start_of_week = today - timedelta(days=today.weekday())  # Monday
-        end_of_week = start_of_week + timedelta(days=6)  # Sunday
+        start_of_week = today - timedelta(days=today.weekday())
+        end_of_week = start_of_week + timedelta(days=6)
 
         # Fetch the latest record per day
         cur.execute(
@@ -361,20 +361,20 @@ def weekly_time_outside_graph():
         results = cur.fetchall()
 
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        days = day_names  # We want all days of week displayed
-        values = [0] * 7  # Initialize with zeros for all days
+        days = []
+        values = []
+        existing_data = {}
         
-        # Create a dictionary to map dates to their weekday index (0=Monday, 6=Sunday)
-        date_to_weekday = {}
-        for i in range(7):
-            current_date = start_of_week + timedelta(days=i)
-            date_to_weekday[current_date] = i
-
-        # Populate values with data from database
+        # Store seconds
         for date, time_seconds in results:
-            if date in date_to_weekday:
-                weekday_index = date_to_weekday[date]
-                values[weekday_index] = (time_seconds / 3600) if time_seconds is not None else 0
+            existing_data[date] = time_seconds if time_seconds is not None else 0
+
+        # Generate all days of the week
+        for day_offset in range(7):
+            current_date = start_of_week + timedelta(days=day_offset)
+            days.append(day_names[day_offset])
+            # Convert seconds to hours 
+            values.append(existing_data.get(current_date, 0) / 3600)
 
         plt.style.use('dark_background')
         
@@ -392,39 +392,32 @@ def weekly_time_outside_graph():
                             alpha=0.8, transform=ax.transAxes, zorder=0)
         ax.add_patch(box)
         
-        # Create bars with rounded tops for each day
+        # Create rounded bars using Rectangle patches
         bar_width = 0.7
         for i, (day, value) in enumerate(zip(days, values)):
-            # Create the main bar
-            bar = plt.Rectangle((i - bar_width/2, 0), bar_width, value, 
-                              color='#FFA500', alpha=0.9, zorder=3)
-            ax.add_patch(bar)
+            # Create the main rectangular part of the bar
+            rect = plt.Rectangle((i - bar_width/2, 0), bar_width, value, 
+                               color='#FFA500', alpha=0.9, zorder=3)
+            ax.add_patch(rect)
             
-            # Create rounded top if there's a value
-            if value > 0:
-                from matplotlib.patches import Ellipse
-                cap = Ellipse((i, value), width=bar_width, height=bar_width*0.4,
-                            color='#FFA500', alpha=0.9, zorder=3)
-                ax.add_patch(cap)
+            # Create a rounded cap on top of the bar
+            cap_radius = bar_width * 0.2
+            cap = plt.Rectangle((i - bar_width/2, value - cap_radius), 
+                              bar_width, cap_radius * 2,
+                              color='#FFA500', alpha=0.9, zorder=3,
+                              linewidth=0,
+                              capstyle='round')
+            ax.add_patch(cap)
             
-            # Add glow effect
-            bar.set_path_effects([
+            # Add subtle glow effect to bars
+            rect.set_path_effects([
                 patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
                 patheffects.Normal()
             ])
-            
-            # Add value labels (even for zero values)
-            ax.text(i, value + 0.1,
-                   f'{value:.1f}h',
-                   ha='center', va='bottom',
-                   color='#FFA500', 
-                   fontsize=11,
-                   fontweight='bold',
-                   bbox=dict(facecolor='#1a1a1a', 
-                            edgecolor='#FFA500', 
-                            boxstyle='round,pad=0.3',
-                            alpha=0.8),
-                   zorder=4)
+            cap.set_path_effects([
+                patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
+                patheffects.Normal()
+            ])
         
         ax.set_title('Weekly Time Spent Outside', 
                     color='#FFA500', 
@@ -445,7 +438,7 @@ def weekly_time_outside_graph():
         y_max = max(values) * 1.3 if max(values) > 0 else 5
         ax.set_ylim(0, y_max)
         
-        # Customize x-axis to show all days
+        # Customize x-axis
         ax.set_xticks(range(len(days)))
         ax.set_xticklabels(days)
         ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
@@ -475,8 +468,7 @@ def weekly_time_outside_graph():
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "days": days,
             "hours": values,
-            "seconds": [int(v * 3600) for v in values],
-            "message": f"Weekly data from {start_of_week} to {end_of_week}"
+            "seconds": [int(v * 3600) for v in values]  
         }), 200
 
     except Exception as e:
@@ -486,7 +478,6 @@ def weekly_time_outside_graph():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
-
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
