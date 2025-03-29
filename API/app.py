@@ -125,8 +125,8 @@ def submit_feedback() -> Tuple[Dict[str, Any], int]:
         if 'conn' in locals():
             conn.close()
 
-@app.route('/daily-visualization', methods=['POST'])
-def daily_visualization():
+@app.route('/daily-visualisation', methods=['POST'])
+def daily_visualisation():
     try:
         data = request.get_json()
         if not data or 'user_id' not in data:
@@ -135,68 +135,52 @@ def daily_visualization():
         user_id = data['user_id']
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Get today's date
         today = datetime.now().date()
 
-        # Get sunrise and sunset from request
+        # Validate sunrise/sunset
         if 'sunrise' not in data or 'sunset' not in data:
-            return jsonify({
-            }), 400
+            return jsonify({"error": "sunrise and sunset times are required"}), 400
 
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
-        # Get today's total time outside
+        # Get total time outside
         cur.execute(
-            """
-            SELECT total_time_outside_for_given_day FROM final_table
-            WHERE user_id = %s AND DATE(time) = %s
-            ORDER BY time DESC
-            LIMIT 1
-            """,
+            """SELECT total_time_outside_for_given_day FROM final_table
+               WHERE user_id = %s AND DATE(time) = %s
+               ORDER BY time DESC LIMIT 1""",
             (user_id, today)
         )
-        result = cur.fetchone()
-        total_time_seconds = result[0] if result and result[0] is not None else 0
+        total_time_seconds = cur.fetchone()[0] or 0
         formatted_time = format_time(total_time_seconds)
 
-        # Get all outdoor periods for today
+        # Get outdoor periods
         cur.execute(
-            """
-            SELECT time, "outside?" 
-            FROM final_table
-            WHERE user_id = %s AND DATE(time) = %s
-            ORDER BY time ASC
-            """,
+            """SELECT time, "outside?" FROM final_table
+               WHERE user_id = %s AND DATE(time) = %s
+               ORDER BY time ASC""",
             (user_id, today)
         )
         results = cur.fetchall()
 
         outdoor_periods = []
-        prev_time = None
-        prev_outside = False
-
-        for record in results:
-            record_time, outside = record
-            if prev_outside and not outside:
-                # Transition from outside to inside
-                if prev_time:
-                    outdoor_periods.append((prev_time.time(), record_time.time()))
-            prev_time = record_time
-            prev_outside = outside
+        prev_time, prev_outside = None, False
+        for record_time, outside in results:
+            if prev_outside and not outside and prev_time:
+                outdoor_periods.append((prev_time.time(), record_time.time()))
+            prev_time, prev_outside = record_time, outside
 
         if prev_outside and prev_time:
             outdoor_periods.append((prev_time.time(), datetime.now().time()))
 
-        # Convert sunrise/sunset to time objects
+        # Convert sunrise/sunset
         try:
             sunrise_time = datetime.strptime(sunrise_str, "%H:%M").time()
             sunset_time = datetime.strptime(sunset_str, "%H:%M").time()
         except ValueError:
-            return jsonify({"error": "Invalid sunrise/sunset format (expected HH:MM)"}), 400
+            return jsonify({"error": "Invalid time format (expected HH:MM)"}), 400
 
-        # Create the visualization 
+        # Create visualization
         plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(14, 10), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
@@ -206,34 +190,29 @@ def daily_visualization():
         center = (0, 0)
         arc_width = 50
 
-        # Calculate daylight duration in seconds
+        # Calculate daylight duration
         daylight_duration = (datetime.combine(today, sunset_time) - 
-                           datetime.combine(today, sunrise_time)).total_seconds()
+                          datetime.combine(today, sunrise_time)).total_seconds()
         
-        # Convert time to angle (sunrise at 0°, sunset at 180°)
         def time_to_daylight_angle(t: time) -> float:
-            
-            if t <= sunrise_time:
-                return 0
-            if t >= sunset_time:
-                return 180
-            seconds_since_sunrise = (datetime.combine(today, t) - 
-                                    datetime.combine(today, sunrise_time)).total_seconds()
-            return 180 * (seconds_since_sunrise / daylight_duration)
+            if t <= sunrise_time: return 0
+            if t >= sunset_time: return 180
+            seconds = (datetime.combine(today, t) - 
+                     datetime.combine(today, sunrise_time)).total_seconds()
+            return 180 * (seconds / daylight_duration)
 
-        # Draw the base arch 
-        daylight_arc = Arc(center, 2*radius, 2*radius, angle=0, 
-                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
+        ax.set_xlim(radius+3, -radius-3)  
+
+        # Draw base arch
+        daylight_arc = Arc(center, 2*radius, 2*radius, angle=0,
+                         theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw the outdoor periods
+        # Draw outdoor periods
         for start, end in outdoor_periods:
-            # Clip outdoor periods to daylight hours
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
-            
-            if start_clipped >= end_clipped:
-                continue  
+            if start_clipped >= end_clipped: continue  
                 
             start_angle = time_to_daylight_angle(start_clipped)
             end_angle = time_to_daylight_angle(end_clipped)
@@ -242,66 +221,40 @@ def daily_visualization():
                             theta1=start_angle, theta2=end_angle,
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
-        
+
+        # Time markers (adjusted for flipped coordinates)
         midday_time = (datetime.combine(today, sunrise_time) + 
                      timedelta(seconds=daylight_duration/2)).time()
         
-        time_markers = [
+        for time_marker, label in [
             (sunrise_time, sunrise_str),
-            (midday_time, "Midday"),
+            (midday_time, "Midday"), 
             (sunset_time, sunset_str)
-        ]
-        
-        for time_marker, label in time_markers:
+        ]:
             angle = time_to_daylight_angle(time_marker)
-
-            mirrored_angle = 180 - angle
-            x = radius * np.cos(np.radians(mirrored_angle))
-            y = radius * np.sin(np.radians(mirrored_angle))
+            x, y = radius * np.cos(np.radians(angle)), radius * np.sin(np.radians(angle))
             
-            ha = 'center'
-            va = 'center'
-            offset_x = 0
-            offset_y = 0
-            font_size = 14
+            ha = 'left' if angle < 90 else 'right' if angle > 90 else 'center'
+            offset_x = 0.6 if angle < 90 else -0.6 if angle > 90 else 0
+            offset_y = 0.6 if angle == 90 else 0
             
-            if angle < 90:  # Left side (sunrise)
-                ha = 'left'
-                offset_x = 0.6
-            elif angle > 90:  # Right side (sunset)
-                ha = 'right'
-                offset_x = -0.6
-            else:  # Midday at top
-                va = 'bottom'
-                offset_y = 0.6
-            
-            ax.text(x + offset_x, y + offset_y, label, 
-                   color='white', ha=ha, va=va, fontsize=font_size,
-                   fontweight='bold')
+            ax.text(x + offset_x, y + offset_y, label,  
+                   color='white', ha=ha, va='center', fontsize=14, fontweight='bold')
 
-        ax.text(0, 5, "Recommended daylight\n exposure per day:\n45Mins-2hrs", 
-               color='white', 
-               ha='center', va='center',
-               fontsize=20,
-               fontweight='bold',
-               alpha=0.8)
+        # Center texts
+        ax.text(0, 5, "Recommended daylight\nexposure per day:\n45Mins-2hrs", 
+               color='white', ha='center', va='center',
+               fontsize=20, fontweight='bold', alpha=0.8)
 
-        # Add formatted time in the center 
         ax.text(0, 0, formatted_time, 
-               color='#FFA500', 
-               ha='center', va='center',
-               fontsize=42,  
-               fontweight='bold',
-               bbox=dict(facecolor='#1a1a1a88', 
-                         edgecolor='#FFA500', 
-                         boxstyle='round,pad=0.8',  
-                         linewidth=3))  
+               color='#FFA500', ha='center', va='center',
+               fontsize=42, fontweight='bold',
+               bbox=dict(facecolor='#1a1a1a88', edgecolor='#FFA500',
+                        boxstyle='round,pad=0.8', linewidth=3))
 
-        ax.set_xlim(-radius-3, radius+3)
         ax.set_ylim(0, radius+3)
         ax.axis('off')
         ax.set_aspect('equal')
-        
         plt.title('Daylight Exposure', color='#FFA500', pad=30, fontsize=30, fontweight='bold')
         
         buf = BytesIO()
@@ -313,18 +266,20 @@ def daily_visualization():
         return jsonify({
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "total_time_outside": formatted_time,
-            "total_seconds": total_time_seconds,
             "sunrise": sunrise_str,
             "sunset": sunset_str
         }), 200
 
     except Exception as e:
-        print(f"Error in daily visualization generation: {str(e)}")
+        print(f"Visualization error: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'conn' in locals(): conn.close()
         plt.close('all')
+
+
+
+
 @app.route('/weekly-time-outside-graph', methods=['POST'])
 def weekly_time_outside_graph():
     try:
@@ -333,16 +288,15 @@ def weekly_time_outside_graph():
             return jsonify({"error": "user_id is required in request body"}), 400
 
         user_id = data['user_id']
-        
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Get start and end of current week 
+        # Get start and end of current week (Monday to Sunday)
         today = datetime.now().date()
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
 
-        # Fetch the latest record per day
+        # Fetch the latest record per day (keeping your existing query logic)
         cur.execute(
             """
             WITH ranked_entries AS (
@@ -362,47 +316,49 @@ def weekly_time_outside_graph():
         )
         results = cur.fetchall()
 
+        # Initialize all days of the week with 0 values
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         days = []
-        values = []
-        existing_data = {}
+        seconds = []
+        hours = []
         
-        # Store seconds
-        for date, time_seconds in results:
-            existing_data[date] = time_seconds if time_seconds is not None else 0
-
-        # Generate all days of the week
+        # Create a dictionary of existing data
+        existing_data = {record[0]: record[1] for record in results}
+        
+        # Generate data for all 7 days of the week
         for day_offset in range(7):
             current_date = start_of_week + timedelta(days=day_offset)
             days.append(day_names[day_offset])
-            # Convert seconds to hours 
-            values.append(existing_data.get(current_date, 0) / 3600)
+            
+            # Use existing data if available, otherwise 0
+            time_seconds = existing_data.get(current_date, 0)
+            seconds.append(time_seconds)
+            hours.append(time_seconds / 3600)
 
+        # Create the plot 
         plt.style.use('dark_background')
-        
-        # Create figure with custom styling
         fig = plt.figure(figsize=(10, 6), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
         fig.patch.set_linewidth(2)
         
         ax = fig.add_subplot(111, facecolor='#2a2a2a')
         
-        # Create rounded bars using Rectangle patches
-        bar_width = 0.7
-        for i, (day, value) in enumerate(zip(days, values)):
-            # Create rounded rectangle for each bar
-            rect = plt.Rectangle((i - bar_width/2, 0), bar_width, value, 
-                                 linewidth=1.5, edgecolor='#FFA500', 
-                                 facecolor='#FFA500', alpha=0.9,
-                                 capstyle='round', joinstyle='round')
-            ax.add_patch(rect)
-            
-            # Add subtle glow effect
-            rect.set_path_effects([
-                patheffects.withStroke(linewidth=3, foreground='#FFA50022'),
-                patheffects.Normal()
-            ])
+        bars = ax.bar(
+            range(len(days)), 
+            hours, 
+            width=0.7, 
+            color='#FFA500', 
+            alpha=0.9,
+            edgecolor='#FFA500',
+            linewidth=1.5,
+            zorder=2,
+            capstyle='round'  
+        )
         
+        
+        for bar in bars:
+            bar.set_solid_capstyle('round')
+
         ax.set_title('Weekly Time Spent Outside', 
                     color='#FFA500', 
                     pad=25, 
@@ -411,53 +367,40 @@ def weekly_time_outside_graph():
                     fontfamily='sans-serif',
                     loc='center')
         
-        # Customize y-axis
         ax.set_ylabel('Hours Outside', 
                      color='#FFA500', 
                      fontsize=12, 
                      labelpad=15,
                      fontfamily='sans-serif')
         
-        # Set y-axis limit with some padding
-        y_max = max(values) * 1.3 if max(values) > 0 else 5
+        y_max = max(hours) * 1.3 if max(hours) > 0 else 5
         ax.set_ylim(0, y_max)
         
-        # Set x-axis ticks to ensure all days are shown immediately
         ax.set_xticks(range(len(days)))
         ax.set_xticklabels(days)
         
-        # Customize axes
         ax.tick_params(axis='x', colors='#FFA500', labelsize=12, pad=10)
         ax.tick_params(axis='y', colors='#FFA500', labelsize=11)
         
-        # Customize grid
         ax.grid(color='#FFA50033', linestyle='--', linewidth=0.8, alpha=0.5, zorder=1)
-        
-        # Add custom x-axis line
         ax.axhline(0, color='#FFA500', linestyle='-', linewidth=1.5, zorder=2)
         
-        # Make spines invisible
         for spine in ax.spines.values():
             spine.set_visible(False)
         
-        # Force the figure to draw immediately
         fig.canvas.draw()
-        
-        # Adjust layout to prevent clipping
         plt.tight_layout(pad=3)
 
-        # Save to buffer
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', 
-                   facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
+        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
         plt.close(fig)
         buf.seek(0)
         
         return jsonify({
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "days": days,
-            "hours": values,
-            "seconds": [int(v * 3600) for v in values]  
+            "hours": hours,
+            "seconds": seconds
         }), 200
 
     except Exception as e:
@@ -467,6 +410,7 @@ def weekly_time_outside_graph():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
+
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
@@ -523,13 +467,13 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         if last_record:
             last_date = last_record[0].date()
             if current_date > last_date:
-                # New day - reset daily total
+                # New day 
                 total_time_outside_for_given_day = 0
             else:
-                # Same day - use previous daily total
+                # Same day 
                 total_time_outside_for_given_day = last_record[4] if last_record else 0
         else:
-            # No previous records - start fresh
+            # No previous records 
             total_time_outside_for_given_day = 0
 
         # Time calculation logic
@@ -588,7 +532,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
     finally:
         if 'conn' in locals():
             conn.close()
-            
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
