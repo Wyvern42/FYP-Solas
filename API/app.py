@@ -476,16 +476,18 @@ def check_location() -> Tuple[Dict[str, Any], int]:
             if last_record[1]:  # Was outside
                 if is_outside:  # Still outside
                     time_outside = last_record[2] + incremental_time
-                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside += incremental_time
                     total_time_outside_for_given_day += incremental_time
                 else:  # Transitioned to inside
+                    # Only add time up to the transition point
+                    transition_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
                     time_outside = 0
-                    total_time_outside = last_record[3] + incremental_time
-                    total_time_outside_for_given_day += incremental_time
+                    total_time_outside += transition_time
+                    total_time_outside_for_given_day += transition_time
             else:  # Was inside
                 if is_outside:  # Transitioned to outside
                     time_outside = incremental_time
-                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside += incremental_time
                     total_time_outside_for_given_day += incremental_time
                 # Else: still inside (no time added)
         else:  # First record
@@ -496,18 +498,35 @@ def check_location() -> Tuple[Dict[str, Any], int]:
 
         # Sunset transition handling
         if sunset and is_outside:
-            sunset_time = datetime.strptime(sunset, "%H:%M").time()
-            if current_datetime.time() > sunset_time:
-                is_outside = False
-                if last_record and last_record[1]:  # Was outside before sunset
-                    incremental_time = min((datetime.combine(current_date, sunset_time) - last_record[0]).total_seconds(),
-                                        MAX_TIME_BETWEEN_UPDATES)
-                    time_outside = incremental_time
-                    total_time_outside = last_record[3] + incremental_time
-                    total_time_outside_for_given_day += incremental_time
+            try:
+                sunset_time = datetime.strptime(sunset, "%H:%M").time()
+                if current_datetime.time() > sunset_time:
+                    is_outside = False
+                    if last_record and last_record[1]:  # Was outside before sunset
+                        # Calculate time up to sunset
+                        sunset_datetime = datetime.combine(current_date, sunset_time)
+                        transition_time = min((sunset_datetime - last_record[0]).total_seconds(),
+                                            MAX_TIME_BETWEEN_UPDATES)
+                        time_outside = 0
+                        total_time_outside += transition_time
+                        total_time_outside_for_given_day += transition_time
+            except ValueError as e:
+                print(f"Error parsing sunset time: {e}")
 
         # Calculate available daylight hours
         total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
+
+        # Debug logging
+        print(f"""
+        Status Update:
+        - Current Time: {current_datetime}
+        - Previous State: {'Outside' if last_record and last_record[1] else 'Inside' if last_record else 'First Record'}
+        - New State: {'Outside' if is_outside else 'Inside'}
+        - Time Outside: {time_outside} seconds
+        - Total Today: {total_time_outside_for_given_day} seconds
+        - GPS Accuracy: {gps_accuracy}
+        - WiFi Connected: {is_connected_to_wifi}
+        """)
 
         # Insert new record
         cur.execute(
@@ -538,11 +557,11 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         }, 200
 
     except Exception as e:
+        print(f"Error in check_location: {str(e)}")
         return {"error": str(e)}, 500
     finally:
         if 'conn' in locals():
             conn.close()
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
