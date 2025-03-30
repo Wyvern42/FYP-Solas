@@ -144,14 +144,15 @@ def daily_visualisation():
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
-        # Get total time outside
+        # Get total time outside (with proper None handling)
         cur.execute(
             """SELECT total_time_outside_for_given_day FROM final_table
                WHERE user_id = %s AND DATE(time) = %s
                ORDER BY time DESC LIMIT 1""",
             (user_id, today)
         )
-        total_time_seconds = cur.fetchone()[0] or 0
+        result = cur.fetchone()
+        total_time_seconds = result[0] if result else 0
         formatted_time = format_time(total_time_seconds)
 
         # Get outdoor periods
@@ -164,14 +165,15 @@ def daily_visualisation():
         results = cur.fetchall()
 
         outdoor_periods = []
-        prev_time, prev_outside = None, False
-        for record_time, outside in results:
-            if prev_outside and not outside and prev_time:
-                outdoor_periods.append((prev_time.time(), record_time.time()))
-            prev_time, prev_outside = record_time, outside
+        if results:  # Only process periods if we have data
+            prev_time, prev_outside = None, False
+            for record_time, outside in results:
+                if prev_outside and not outside and prev_time:
+                    outdoor_periods.append((prev_time.time(), record_time.time()))
+                prev_time, prev_outside = record_time, outside
 
-        if prev_outside and prev_time:
-            outdoor_periods.append((prev_time.time(), datetime.now().time()))
+            if prev_outside and prev_time:
+                outdoor_periods.append((prev_time.time(), datetime.now().time()))
 
         # Convert sunrise/sunset
         try:
@@ -180,7 +182,7 @@ def daily_visualisation():
         except ValueError:
             return jsonify({"error": "Invalid time format (expected HH:MM)"}), 400
 
-        # Create visualization
+        # Create visualization (always show the arch)
         plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(14, 10), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
@@ -203,12 +205,12 @@ def daily_visualisation():
 
         ax.set_xlim(radius+3, -radius-3)  
 
-        # Draw base arch
+        # Draw base arch (always shown)
         daylight_arc = Arc(center, 2*radius, 2*radius, angle=0,
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw outdoor periods
+        # Draw outdoor periods (only if they exist)
         for start, end in outdoor_periods:
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
@@ -222,7 +224,7 @@ def daily_visualisation():
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
 
-        # Time markers (adjusted for flipped coordinates)
+        # Time markers (always shown)
         midday_time = (datetime.combine(today, sunrise_time) + 
                      timedelta(seconds=daylight_duration/2)).time()
         
@@ -241,7 +243,7 @@ def daily_visualisation():
             ax.text(x + offset_x, y + offset_y, label,  
                    color='white', ha=ha, va='center', fontsize=14, fontweight='bold')
 
-        # Center texts
+        # Center texts (always shown)
         ax.text(0, 5, "Recommended daylight\nexposure per day:\n45Mins-2hrs", 
                color='white', ha='center', va='center',
                fontsize=20, fontweight='bold', alpha=0.8)
@@ -267,7 +269,8 @@ def daily_visualisation():
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "total_time_outside": formatted_time,
             "sunrise": sunrise_str,
-            "sunset": sunset_str
+            "sunset": sunset_str,
+            "data_available": bool(results)  # Add flag indicating if data was available
         }), 200
 
     except Exception as e:
@@ -276,8 +279,6 @@ def daily_visualisation():
     finally:
         if 'conn' in locals(): conn.close()
         plt.close('all')
-
-
 
 
 @app.route('/weekly-time-outside-graph', methods=['POST'])
@@ -411,7 +412,7 @@ def weekly_time_outside_graph():
 
 @app.route('/check-location', methods=['POST'])
 def check_location() -> Tuple[Dict[str, Any], int]:
-    MAX_TIME_BETWEEN_UPDATES = 600  
+    MAX_TIME_BETWEEN_UPDATES = 600  # 10 minutes in seconds
 
     # Input validation
     data = request.get_json()
@@ -459,44 +460,56 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         # Initialize time variables
         time_outside = 0
         total_time_outside = last_record[3] if last_record else 0
-        
-        # Check if it's a new day
-        if last_record:
-            last_date = last_record[0].date()
-            if current_date > last_date:
-                # New day 
-                total_time_outside_for_given_day = 0
-            else:
-                # Same day 
-                total_time_outside_for_given_day = last_record[4] if last_record else 0
-        else:
-            # No previous records 
-            total_time_outside_for_given_day = 0
+        total_time_outside_for_given_day = last_record[4] if last_record else 0
+        incremental_time = 0
 
         # Time calculation logic
-        if is_outside and last_record and last_record[1]:  # Still outside
+        if last_record:
             time_since_last = (current_datetime - last_record[0]).total_seconds()
             incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
-            time_outside = last_record[2] + incremental_time
-            total_time_outside = last_record[3] + incremental_time
-            total_time_outside_for_given_day += incremental_time
+            
+            # Check if it's a new day
+            last_date = last_record[0].date()
+            if current_date > last_date:
+                total_time_outside_for_given_day = 0  # Reset daily counter for new day
 
-        elif not is_outside and last_record and last_record[1]:  # Transition to inside
-            time_outside = min((current_datetime - last_record[0]).total_seconds(), MAX_TIME_BETWEEN_UPDATES)
-            total_time_outside = last_record[3] + time_outside
-            total_time_outside_for_given_day += time_outside
+            if last_record[1]:  # Was outside
+                if is_outside:  # Still outside
+                    time_outside = last_record[2] + incremental_time
+                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside_for_given_day += incremental_time
+                else:  # Transitioned to inside
+                    time_outside = 0
+                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside_for_given_day += incremental_time
+            else:  # Was inside
+                if is_outside:  # Transitioned to outside
+                    time_outside = incremental_time
+                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside_for_given_day += incremental_time
+                # Else: still inside (no time added)
+        else:  # First record
+            if is_outside:
+                time_outside = incremental_time
+                total_time_outside = incremental_time
+                total_time_outside_for_given_day = incremental_time
 
         # Sunset transition handling
         if sunset and is_outside:
             sunset_time = datetime.strptime(sunset, "%H:%M").time()
             if current_datetime.time() > sunset_time:
                 is_outside = False
-                time_outside = min((datetime.combine(current_datetime.date(), sunset_time) - last_record[0]).total_seconds(),
-                                 MAX_TIME_BETWEEN_UPDATES)
+                if last_record and last_record[1]:  # Was outside before sunset
+                    incremental_time = min((datetime.combine(current_date, sunset_time) - last_record[0]).total_seconds(),
+                                        MAX_TIME_BETWEEN_UPDATES)
+                    time_outside = incremental_time
+                    total_time_outside = last_record[3] + incremental_time
+                    total_time_outside_for_given_day += incremental_time
 
         # Calculate available daylight hours
         total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
 
+        # Insert new record
         cur.execute(
             """
             INSERT INTO final_table (
