@@ -538,7 +538,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                data['user_id'], current_datetime, is_outside,
+                data['user_id'], get_current_datetime(), is_outside,
                 time_outside, total_time_outside, total_time_outside_for_given_day,
                 total_available_hours, weather, temperature, uv, gps_accuracy
             )
