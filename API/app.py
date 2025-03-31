@@ -14,7 +14,7 @@ from matplotlib import patheffects
 # Initialize Flask app
 app = Flask(__name__)
 
-GPS_ACCURACY_THRESHOLD = 15
+GPS_ACCURACY_THRESHOLD = 20
 
 # Database configuration
 DB_CONFIG = {
