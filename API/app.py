@@ -144,45 +144,52 @@ def daily_visualisation():
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
-        # Get total time outside (with proper None handling)
+        # Get time series data with cumulative outdoor time
         cur.execute(
-            """SELECT total_time_outside_for_given_day FROM final_table
-               WHERE user_id = %s AND DATE(time) = %s
-               ORDER BY time DESC LIMIT 1""",
-            (user_id, today)
-        )
-        result = cur.fetchone()
-        total_time_seconds = result[0] if result else 0
-        formatted_time = format_time(total_time_seconds)
-
-        # Get outdoor periods
-        cur.execute(
-            """SELECT time, "outside?" FROM final_table
+            """SELECT time, total_time_outside_for_given_day, "outside?" 
+               FROM final_table
                WHERE user_id = %s AND DATE(time) = %s
                ORDER BY time ASC""",
             (user_id, today)
         )
-        results = cur.fetchall()
+        time_series = cur.fetchall()
 
+        # Reconstruct outdoor periods from cumulative time
         outdoor_periods = []
-        if results:  # Only process periods if we have data
-            prev_time, prev_outside = None, False
-            for record_time, outside in results:
-                if prev_outside and not outside and prev_time:
-                    outdoor_periods.append((prev_time.time(), record_time.time()))
-                prev_time, prev_outside = record_time, outside
+        current_out_start = None
+        prev_time = None
+        prev_total = 0
 
-            if prev_outside and prev_time:
-                outdoor_periods.append((prev_time.time(), datetime.now().time()))
+        for record_time, total_outside, is_outside in time_series:
+            if is_outside:
+                if current_out_start is None:  # New outdoor period starts
+                    current_out_start = record_time
+            else:
+                if current_out_start is not None:  # Outdoor period ends
+                    outdoor_periods.append((current_out_start.time(), record_time.time()))
+                    current_out_start = None
+            
+            prev_time = record_time
+            prev_total = total_outside
 
-        # Convert sunrise/sunset
+        # Handle final segment if still outside
+        if current_out_start is not None:
+            outdoor_periods.append((current_out_start.time(), datetime.now().time()))
+
+        # Handle case where first record already has outdoor time
+        if time_series and time_series[0][2] and time_series[0][1] > 0:
+            initial_duration = time_series[0][1]
+            estimated_start = time_series[0][0] - timedelta(seconds=initial_duration)
+            outdoor_periods.insert(0, (estimated_start.time(), time_series[0][0].time()))
+
+        # Convert sunrise/sunset strings to time objects
         try:
             sunrise_time = datetime.strptime(sunrise_str, "%H:%M").time()
             sunset_time = datetime.strptime(sunset_str, "%H:%M").time()
         except ValueError:
             return jsonify({"error": "Invalid time format (expected HH:MM)"}), 400
 
-        # Create visualization (always show the arch)
+        # Create visualization
         plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(14, 10), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
@@ -203,14 +210,14 @@ def daily_visualisation():
                      datetime.combine(today, sunrise_time)).total_seconds()
             return 180 * (seconds / daylight_duration)
 
-        ax.set_xlim(radius+3, -radius-3)  
+        ax.set_xlim(radius+3, -radius-3)  # Flips x-axis to put sunrise on right
 
-        # Draw base arch (always shown)
+        # Draw base arch (full daylight period)
         daylight_arc = Arc(center, 2*radius, 2*radius, angle=0,
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw outdoor periods (only if they exist)
+        # Draw outdoor periods (only during daylight)
         for start, end in outdoor_periods:
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
@@ -219,12 +226,19 @@ def daily_visualisation():
             start_angle = time_to_daylight_angle(start_clipped)
             end_angle = time_to_daylight_angle(end_clipped)
             
+            # Main segment
             outdoor_arc = Arc(center, 2*radius, 2*radius, angle=0,
                             theta1=start_angle, theta2=end_angle,
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
+            
+            # Subtle highlight
+            highlight = Arc(center, 2*(radius-0.2), 2*(radius-0.2), angle=0,
+                          theta1=start_angle, theta2=end_angle,
+                          color='#FFD700', lw=arc_width-10, alpha=0.3)
+            ax.add_patch(highlight)
 
-        # Time markers (always shown)
+        # Time markers
         midday_time = (datetime.combine(today, sunrise_time) + 
                      timedelta(seconds=daylight_duration/2)).time()
         
@@ -234,7 +248,8 @@ def daily_visualisation():
             (sunset_time, sunset_str)
         ]:
             angle = time_to_daylight_angle(time_marker)
-            x, y = radius * np.cos(np.radians(angle)), radius * np.sin(np.radians(angle))
+            x = radius * np.cos(np.radians(angle))
+            y = radius * np.sin(np.radians(angle))
             
             ha = 'left' if angle < 90 else 'right' if angle > 90 else 'center'
             offset_x = 0.6 if angle < 90 else -0.6 if angle > 90 else 0
@@ -243,7 +258,10 @@ def daily_visualisation():
             ax.text(x + offset_x, y + offset_y, label,  
                    color='white', ha=ha, va='center', fontsize=14, fontweight='bold')
 
-        # Center texts (always shown)
+        # Center texts
+        total_time_seconds = time_series[-1][1] if time_series else 0
+        formatted_time = format_time(total_time_seconds)
+        
         ax.text(0, 5, "Recommended daylight\nexposure per day:\n45Mins-2hrs", 
                color='white', ha='center', va='center',
                fontsize=20, fontweight='bold', alpha=0.8)
@@ -259,6 +277,7 @@ def daily_visualisation():
         ax.set_aspect('equal')
         plt.title('Daylight Exposure', color='#FFA500', pad=30, fontsize=30, fontweight='bold')
         
+        # Save to buffer
         buf = BytesIO()
         fig.savefig(buf, format='png', dpi=180, bbox_inches='tight',
                    facecolor=fig.get_facecolor(), edgecolor=fig.get_edgecolor())
@@ -270,7 +289,11 @@ def daily_visualisation():
             "total_time_outside": formatted_time,
             "sunrise": sunrise_str,
             "sunset": sunset_str,
-            "data_available": bool(results)  # Add flag indicating if data was available
+            "outdoor_periods": [
+                {"start": str(start), "end": str(end)} 
+                for start, end in outdoor_periods
+            ],
+            "data_available": bool(time_series)
         }), 200
 
     except Exception as e:
@@ -280,6 +303,12 @@ def daily_visualisation():
         if 'conn' in locals(): conn.close()
         plt.close('all')
 
+def format_time(seconds):
+    """Convert seconds to HH:MM:SS format"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 @app.route('/weekly-time-outside-graph', methods=['POST'])
 def weekly_time_outside_graph():
