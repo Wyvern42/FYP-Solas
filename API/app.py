@@ -232,11 +232,6 @@ def daily_visualisation():
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
             
-            # Subtle highlight
-            highlight = Arc(center, 2*(radius-0.2), 2*(radius-0.2), angle=0,
-                          theta1=start_angle, theta2=end_angle,
-                          color='#FFD700', lw=arc_width-10, alpha=0.3)
-            ax.add_patch(highlight)
 
         # Time markers
         midday_time = (datetime.combine(today, sunrise_time) + 
@@ -256,7 +251,7 @@ def daily_visualisation():
             offset_y = 0.6 if angle == 90 else 0
             
             ax.text(x + offset_x, y + offset_y, label,  
-                   color='white', ha=ha, va='center', fontsize=14, fontweight='bold')
+                   color='white', ha=ha, va='center', fontsize=18, fontweight='bold')
 
         # Center texts
         total_time_seconds = time_series[-1][1] if time_series else 0
