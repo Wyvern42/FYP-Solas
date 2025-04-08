@@ -447,7 +447,8 @@ def weekly_time_outside_graph():
                    color='#FFA500', fontsize=11, weight='bold')
             
             if width >= goal_minutes:
-                check_x = min(width, goal_minutes - 5)
+                # Position checkmark at 95% of the bar width (inside the bar)
+                check_x = width * 0.95
                 ax.text(check_x, bar.get_y() + bar.get_height()/2,
                        '✓', 
                        ha='center', va='center',
@@ -475,7 +476,6 @@ def weekly_time_outside_graph():
         if 'conn' in locals():
             conn.close()
         plt.close('all')
-
 
 
 @app.route('/check-location', methods=['POST'])
