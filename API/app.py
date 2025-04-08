@@ -10,7 +10,7 @@ from datetime import datetime, time, timedelta, date
 import psycopg2
 from typing import Dict, Any, Tuple, List, Optional
 from matplotlib import patheffects
-import pytz
+
 
 app = Flask(__name__)
 
