@@ -523,52 +523,60 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         )
         last_record = cur.fetchone()
 
+        # Initialize all time variables
         time_outside = 0
-        total_time_outside = last_record[2] if last_record else 0
-        total_time_outside_for_given_day = last_record[3] if last_record else 0
+        total_time_outside = last_record[3] if last_record else 0  # Use total_time_outside from last record
+        total_time_outside_for_given_day = last_record[4] if last_record else 0  # Use total_time_outside_for_given_day from last record
         incremental_time = 0
 
         if last_record:
             last_record_time = last_record[0]
+            last_record_date = last_record_time.date()
             time_since_last = (current_datetime - last_record_time).total_seconds()
             incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
             
-            last_date = last_record_time.date()
-            if current_date > last_date:
+            # Reset daily total if it's a new day
+            if current_date > last_record_date:
                 total_time_outside_for_given_day = 0
 
-            if last_record[1]:  # outside?
-                if is_outside:
+            # Handle state transitions
+            if last_record[1]:  # If was outside
+                if is_outside:  # Still outside
                     time_outside = last_record[2] + incremental_time
                     total_time_outside += incremental_time
                     total_time_outside_for_given_day += incremental_time
-                else:
+                else:  # Transition from outside to inside
+                    time_outside = 0  # Reset time_outside counter
+                    # Only add the actual time spent outside before transition
                     transition_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
-                    time_outside = 0
                     total_time_outside += transition_time
                     total_time_outside_for_given_day += transition_time
-            else:
-                if is_outside:
-                    time_outside = incremental_time
+            else:  # If was inside
+                if is_outside:  # Transition from inside to outside
+                    time_outside = incremental_time  # Start counting time_outside
                     total_time_outside += incremental_time
                     total_time_outside_for_given_day += incremental_time
-        else:
+                else:  # Still inside
+                    # No change to any counters
+                    pass
+        else:  # First record
             if is_outside:
                 time_outside = incremental_time
                 total_time_outside = incremental_time
                 total_time_outside_for_given_day = incremental_time
 
+        # Handle sunset transition if outside
         if sunset and is_outside:
             try:
                 sunset_time = datetime.strptime(sunset, "%H:%M").time()
                 if current_datetime.time() > sunset_time:
                     is_outside = False
-                    if last_record and last_record[1]:
+                    if last_record and last_record[1]:  # Was outside before sunset
                         sunset_datetime = datetime.combine(current_date, sunset_time)
                         transition_time = min((sunset_datetime - last_record_time).total_seconds(),
                                             MAX_TIME_BETWEEN_UPDATES)
-                        time_outside = 0
-                        total_time_outside += transition_time
+                        time_outside = 0  # Reset time_outside counter
+                        total_time_outside += transition_time  # Add time until sunset
                         total_time_outside_for_given_day += transition_time
             except ValueError as e:
                 print(f"Error parsing sunset time: {e}")
@@ -580,7 +588,8 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         - Current Time: {current_datetime.strftime('%d-%m-%Y %H:%M:%S')}
         - Previous State: {'Outside' if last_record and last_record[1] else 'Inside' if last_record else 'First Record'}
         - New State: {'Outside' if is_outside else 'Inside'}
-        - Time Outside: {time_outside} seconds
+        - Time Outside: {time_outside} seconds (current session)
+        - Total Time Outside: {total_time_outside} seconds (lifetime)
         - Total Today: {total_time_outside_for_given_day} seconds
         - GPS Accuracy: {gps_accuracy}
         - WiFi Connected: {is_connected_to_wifi}
@@ -619,6 +628,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
     finally:
         if 'conn' in locals():
             conn.close()
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
