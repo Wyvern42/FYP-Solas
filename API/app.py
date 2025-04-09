@@ -11,10 +11,9 @@ import psycopg2
 from typing import Dict, Any, Tuple, List, Optional
 from matplotlib import patheffects
 
-
 app = Flask(__name__)
 
-GPS_ACCURACY_THRESHOLD = 18
+GPS_ACCURACY_THRESHOLD = 10
 
 # Database configuration
 DB_CONFIG = {
@@ -155,8 +154,21 @@ def daily_visualisation():
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
+        # Get the most recent total_time_outside_for_given_day (weekly graph method)
         cur.execute(
-            """SELECT time, total_time_outside_for_given_day, "outside?" 
+            """SELECT total_time_outside_for_given_day 
+               FROM final_table
+               WHERE user_id = %s AND time BETWEEN %s AND %s
+               ORDER BY time DESC
+               LIMIT 1""",
+            (user_id, start_of_day, end_of_day)
+        )
+        total_result = cur.fetchone()
+        total_time_seconds = total_result[0] if total_result else 0
+
+        # Still get detailed records for accurate segment visualization
+        cur.execute(
+            """SELECT time, "outside?", time_outside 
                FROM final_table
                WHERE user_id = %s AND time BETWEEN %s AND %s
                ORDER BY time ASC""",
@@ -164,37 +176,45 @@ def daily_visualisation():
         )
         time_series = cur.fetchall()
 
-        # Initialize with default values (no data)
+        # Reconstruct outdoor periods (accurate visualization)
         outdoor_periods = []
-        total_time_seconds = 0
-        has_data = bool(time_series)
+        current_out_start = None
+        last_outside_time = None
+        accumulated_time = 0
 
-        if has_data:
-            outdoor_periods = []
-            current_out_start = None
-            prev_status = False
-            total_time_seconds = time_series[-1][1] if time_series else 0
-
-            for record in time_series:
-                record_time = record[0]
-                is_outside = record[2]
-                
-                if not prev_status and is_outside:
+        for record_time, is_outside, time_outside in time_series:
+            if is_outside:
+                if current_out_start is None:  # Start new outdoor period
                     current_out_start = record_time
-                elif prev_status and not is_outside and current_out_start:
-                    outdoor_periods.append((current_out_start.time(), record_time.time()))
+                    accumulated_time = time_outside
+                else:
+                    # Add incremental time (max 10 mins)
+                    if last_outside_time:
+                        time_since_last = (record_time - last_outside_time).total_seconds()
+                        if time_since_last <= 600:
+                            accumulated_time += time_since_last
+            else:
+                if current_out_start is not None:  # End outdoor period
+                    end_time = current_out_start + timedelta(seconds=accumulated_time)
+                    outdoor_periods.append((current_out_start.time(), end_time.time()))
                     current_out_start = None
-                prev_status = is_outside
+                    accumulated_time = 0
+            
+            last_outside_time = record_time if is_outside else None
 
-            if current_out_start is not None:
-                outdoor_periods.append((current_out_start.time(), device_time.time()))
+        # Handle still outside at end of day
+        if current_out_start is not None:
+            end_time = current_out_start + timedelta(seconds=accumulated_time)
+            outdoor_periods.append((current_out_start.time(), end_time.time()))
 
+        # Convert sunrise/sunset strings to time objects
         try:
             sunrise_time = datetime.strptime(sunrise_str, "%H:%M").time()
             sunset_time = datetime.strptime(sunset_str, "%H:%M").time()
         except ValueError:
             return jsonify({"error": "Invalid time format (expected HH:MM)"}), 400
 
+        # Visualization setup
         plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(20, 16), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
@@ -216,12 +236,12 @@ def daily_visualisation():
 
         ax.set_xlim(radius+7, -radius-7)
 
-        # Base daylight arc (gray)
+        # Base daylight arc
         daylight_arc = Arc(center, 2*radius, 2*radius, angle=0,
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Outdoor periods (orange) - will be empty if no data
+        # Draw outdoor periods
         for start, end in outdoor_periods:
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
@@ -331,7 +351,8 @@ def daily_visualisation():
             ],
             "hour_markers": [str(m) for m in hour_markers],
             "current_time": str(current_time),
-            "data_available": has_data  # Indicates whether real data exists
+            "data_available": bool(time_series),
+            "calculation_method": "weekly_graph_style"
         }), 200
 
     except Exception as e:
@@ -340,6 +361,13 @@ def daily_visualisation():
     finally:
         if 'conn' in locals(): conn.close()
         plt.close('all')
+
+def format_time(seconds):
+    """Convert seconds to H:MM format"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    return f"{hours}:{minutes:02d}"
+
 
 @app.route('/weekly-time-outside-graph', methods=['POST'])
 def weekly_time_outside_graph():
@@ -447,7 +475,6 @@ def weekly_time_outside_graph():
                    color='#FFA500', fontsize=11, weight='bold')
             
             if width >= goal_minutes:
-                # Position checkmark at 95% of the bar width (inside the bar)
                 check_x = width * 0.95
                 ax.text(check_x, bar.get_y() + bar.get_height()/2,
                        '✓', 
@@ -482,6 +509,31 @@ def weekly_time_outside_graph():
 def check_location() -> Tuple[Dict[str, Any], int]:
     MAX_TIME_BETWEEN_UPDATES = 600  # 10 minutes in seconds
 
+    # Weather to lux mapping 
+    WEATHER_LUX_VALUES = {
+        'Clear': 100000,
+        'Sunny': 100000,
+        'Mostly Sunny': 80000,
+        'Partly Cloudy': 50000,
+        'Cloudy': 25000,
+        'Overcast': 10000,
+        'Light Rain': 15000,
+        'Rain': 8000,
+        'Heavy Rain': 5000,
+        'Thunderstorm': 3000,
+        'Snow': 15000,
+        'Fog': 10000,
+        'Unknown': 25000  # Default value
+    }
+
+    def calculate_lux(weather: str) -> int:
+        """Estimate lux based on weather conditions."""
+        normalized_weather = weather.lower().strip()
+        for condition, lux in WEATHER_LUX_VALUES.items():
+            if condition.lower() in normalized_weather:
+                return lux
+        return WEATHER_LUX_VALUES['Unknown']
+
     data = request.get_json()
     if not data:
         return {"error": "Request must be JSON"}, 400
@@ -502,132 +554,104 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         sunrise = data.get('sunrise')
         sunset = data.get('sunset')
         gps_accuracy = round(float(data['gps_accuracy']), 2)
+        
+        # Calculate lux based on weather
+        lux = calculate_lux(weather)
 
-        if sunrise and sunset and not is_daytime(sunrise, sunset, current_datetime):
-            return {"message": "Data collection paused during nighttime"}, 200
-
+        # Calculate is_outside regardless of time
         is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD and not is_connected_to_wifi
 
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT time, "outside?", 
-                   time_outside, total_time_outside, total_time_outside_for_given_day 
-            FROM final_table 
-            WHERE user_id = %s 
-            ORDER BY time DESC 
-            LIMIT 1
-            """,
-            (data['user_id'],)
-        )
-        last_record = cur.fetchone()
+        # Skip database operations during nighttime
+        skip_db_update = sunrise and sunset and not is_daytime(sunrise, sunset, current_datetime)
 
-        # Initialize all time variables
-        time_outside = 0
-        total_time_outside = last_record[3] if last_record else 0  # Use total_time_outside from last record
-        total_time_outside_for_given_day = last_record[4] if last_record else 0  # Use total_time_outside_for_given_day from last record
-        incremental_time = 0
-
-        if last_record:
-            last_record_time = last_record[0]
-            last_record_date = last_record_time.date()
-            time_since_last = (current_datetime - last_record_time).total_seconds()
-            incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
-            
-            # Reset daily total if it's a new day
-            if current_date > last_record_date:
-                total_time_outside_for_given_day = 0
-
-            # Handle state transitions
-            if last_record[1]:  # If was outside
-                if is_outside:  # Still outside
-                    time_outside = last_record[2] + incremental_time
-                    total_time_outside += incremental_time
-                    total_time_outside_for_given_day += incremental_time
-                else:  # Transition from outside to inside
-                    time_outside = 0  # Reset time_outside counter
-                    # Only add the actual time spent outside before transition
-                    transition_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
-                    total_time_outside += transition_time
-                    total_time_outside_for_given_day += transition_time
-            else:  # If was inside
-                if is_outside:  # Transition from inside to outside
-                    time_outside = incremental_time  # Start counting time_outside
-                    total_time_outside += incremental_time
-                    total_time_outside_for_given_day += incremental_time
-                else:  # Still inside
-                    # No change to any counters
-                    pass
-        else:  # First record
-            if is_outside:
-                time_outside = incremental_time
-                total_time_outside = incremental_time
-                total_time_outside_for_given_day = incremental_time
-
-        # Handle sunset transition if outside
-        if sunset and is_outside:
-            try:
-                sunset_time = datetime.strptime(sunset, "%H:%M").time()
-                if current_datetime.time() > sunset_time:
-                    is_outside = False
-                    if last_record and last_record[1]:  # Was outside before sunset
-                        sunset_datetime = datetime.combine(current_date, sunset_time)
-                        transition_time = min((sunset_datetime - last_record_time).total_seconds(),
-                                            MAX_TIME_BETWEEN_UPDATES)
-                        time_outside = 0  # Reset time_outside counter
-                        total_time_outside += transition_time  # Add time until sunset
-                        total_time_outside_for_given_day += transition_time
-            except ValueError as e:
-                print(f"Error parsing sunset time: {e}")
-
-        total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
-
-        print(f"""
-        Status Update:
-        - Current Time: {current_datetime.strftime('%d-%m-%Y %H:%M:%S')}
-        - Previous State: {'Outside' if last_record and last_record[1] else 'Inside' if last_record else 'First Record'}
-        - New State: {'Outside' if is_outside else 'Inside'}
-        - Time Outside: {time_outside} seconds (current session)
-        - Total Time Outside: {total_time_outside} seconds (lifetime)
-        - Total Today: {total_time_outside_for_given_day} seconds
-        - GPS Accuracy: {gps_accuracy}
-        - WiFi Connected: {is_connected_to_wifi}
-        """)
-
-        cur.execute(
-            """
-            INSERT INTO final_table (
-                user_id, time, "outside?", 
-                time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv, gps_accuracy
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                data['user_id'], current_datetime, is_outside,
-                time_outside, total_time_outside, total_time_outside_for_given_day,
-                total_available_hours, weather, temperature, uv, gps_accuracy
+        if not skip_db_update:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT time, "outside?", 
+                       time_outside, total_time_outside, total_time_outside_for_given_day 
+                FROM final_table 
+                WHERE user_id = %s 
+                ORDER BY time DESC 
+                LIMIT 1
+                """,
+                (data['user_id'],)
             )
-        )
-        conn.commit()
+            last_record = cur.fetchone()
 
-        return {
+            time_outside = 0
+            total_time_outside = last_record[3] if last_record else 0
+            total_time_outside_for_given_day = last_record[4] if last_record else 0
+            incremental_time = 0
+
+            if last_record:
+                time_since_last = (current_datetime - last_record[0]).total_seconds()
+                incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
+                
+                last_date = last_record[0].date()
+                if current_date > last_date:
+                    total_time_outside_for_given_day = 0
+
+                if last_record[1]:  # Was outside
+                    if is_outside:  # Still outside
+                        time_outside = last_record[2] + incremental_time
+                        total_time_outside += incremental_time
+                        total_time_outside_for_given_day += incremental_time
+                    else:  # Transitioned to inside
+                        transition_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
+                        time_outside = 0
+                        total_time_outside += transition_time
+                        total_time_outside_for_given_day += transition_time
+                else:  # Was inside
+                    if is_outside:  # Transitioned to outside
+                        time_outside = incremental_time
+                        total_time_outside += incremental_time
+                        total_time_outside_for_given_day += incremental_time
+            else:  # First record
+                if is_outside:
+                    time_outside = incremental_time
+                    total_time_outside = incremental_time
+                    total_time_outside_for_given_day = incremental_time
+
+            total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
+
+            cur.execute(
+                """
+                INSERT INTO final_table (
+                    user_id, time, "outside?", 
+                    time_outside, total_time_outside, total_time_outside_for_given_day,
+                    total_available_hours, weather, temperature, uv, gps_accuracy, lux
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    data['user_id'], current_datetime, is_outside,
+                    time_outside, total_time_outside, total_time_outside_for_given_day,
+                    total_available_hours, weather, temperature, uv, gps_accuracy, lux
+                )
+            )
+            conn.commit()
+            conn.close()
+
+        response_data = {
             "is_outside": is_outside,
             "gps_accuracy": gps_accuracy,
-            "time_outside": time_outside,
-            "total_time_outside": total_time_outside,
-            "total_time_outside_for_given_day": total_time_outside_for_given_day,
+            "time_outside": time_outside if not skip_db_update else None,
+            "total_time_outside": total_time_outside if not skip_db_update else None,
+            "total_time_outside_for_given_day": total_time_outside_for_given_day if not skip_db_update else None,
             "weather": weather,
             "temperature": temperature,
-            "uv": uv
-        }, 200
+            "uv": uv,
+            "lux": lux,
+            "database_updated": not skip_db_update
+        }
+
+        print(f"Returning response: {response_data}")
+        return response_data, 200
 
     except Exception as e:
         print(f"Error in check_location: {str(e)}")
         return {"error": str(e)}, 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 if __name__ == '__main__':
