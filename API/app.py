@@ -176,13 +176,28 @@ def daily_visualisation():
         )
         time_series = cur.fetchall()
 
-        # Create individual segments for each outdoor record
+        # Create segments showing time_outside PRIOR to each record
         outdoor_segments = []
         for record_time, is_outside, time_outside in time_series:
             if is_outside and time_outside > 0:
-                start_time = record_time.time()
-                end_time = (record_time + timedelta(seconds=time_outside)).time()
-                outdoor_segments.append((start_time, end_time))
+                end_time = record_time.time()
+                start_time = (record_time - timedelta(seconds=time_outside)).time()
+                
+                # Clip to daylight hours
+                if start_time < sunrise_time:
+                    start_time = sunrise_time
+                if end_time > sunset_time:
+                    end_time = sunset_time
+                
+                # Only add if valid duration remains
+                if start_time < end_time:
+                    outdoor_segments.append({
+                        'start': start_time,
+                        'end': end_time,
+                        'duration': (datetime.combine(today, end_time) - 
+                                   datetime.combine(today, start_time)).total_seconds(),
+                        'record_time': record_time.time()
+                    })
 
         # Convert sunrise/sunset strings to time objects
         try:
@@ -218,21 +233,17 @@ def daily_visualisation():
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw individual outdoor segments
-        for start, end in outdoor_segments:
-            start_clipped = max(start, sunrise_time)
-            end_clipped = min(end, sunset_time)
-            if start_clipped >= end_clipped: continue 
-                
-            start_angle = time_to_daylight_angle(start_clipped)
-            end_angle = time_to_daylight_angle(end_clipped)
+        # Draw outdoor segments (time_outside periods BEFORE each record)
+        for segment in outdoor_segments:
+            start_angle = time_to_daylight_angle(segment['start'])
+            end_angle = time_to_daylight_angle(segment['end'])
             
             outdoor_arc = Arc(center, 2*radius, 2*radius, angle=0,
                             theta1=start_angle, theta2=end_angle,
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
 
-        # Hour markers (same as before)
+        # Hour markers
         sunrise_dt = datetime.combine(today, sunrise_time)
         sunset_dt = datetime.combine(today, sunset_time)
         hour_markers = []
@@ -323,13 +334,13 @@ def daily_visualisation():
             "sunrise": sunrise_str,
             "sunset": sunset_str,
             "outdoor_segments": [
-                {"start": str(start), "end": str(end)} 
-                for start, end in outdoor_segments
+                {"start": str(s['start']), "end": str(s['end']), 
+                 "duration": s['duration'], "recorded_at": str(s['record_time'])}
+                for s in outdoor_segments
             ],
             "hour_markers": [str(m) for m in hour_markers],
             "current_time": str(current_time),
-            "data_available": bool(time_series),
-            "calculation_method": "individual_segments"
+            "data_available": bool(time_series)
         }), 200
 
     except Exception as e:
@@ -338,6 +349,7 @@ def daily_visualisation():
     finally:
         if 'conn' in locals(): conn.close()
         plt.close('all')
+
 
 def format_time(seconds):
     """Convert seconds to H:MM format"""
