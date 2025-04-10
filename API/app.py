@@ -154,7 +154,7 @@ def daily_visualisation():
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
-        # Get the most recent total_time_outside_for_given_day (unchanged)
+        # Get the most recent total_time_outside_for_given_day
         cur.execute(
             """SELECT total_time_outside_for_given_day 
                FROM final_table
@@ -166,29 +166,29 @@ def daily_visualisation():
         total_result = cur.fetchone()
         total_time_seconds = total_result[0] if total_result else 0
 
-        # MODIFIED SEGMENT CALCULATION: Get all time_outside records
+        # MODIFIED: Get all records and calculate segments ending at timestamp
         cur.execute(
             """SELECT time, time_outside 
                FROM final_table
-               WHERE user_id = %s 
-               AND time BETWEEN %s AND %s
+               WHERE user_id = %s AND time BETWEEN %s AND %s
                AND time_outside > 0
                ORDER BY time ASC""",
             (user_id, start_of_day, end_of_day)
         )
         outdoor_segments = []
         for record_time, duration in cur.fetchall():
-            start_time = record_time.time()
-            end_time = (record_time + timedelta(seconds=duration)).time()
+            end_time = record_time.time()  # Segment ends at record time
+            start_time = (record_time - timedelta(seconds=duration)).time()  # Extends backward
             outdoor_segments.append((start_time, end_time))
 
-        # Rest of your original visualization code remains exactly the same
+        # Convert sunrise/sunset strings to time objects
         try:
             sunrise_time = datetime.strptime(sunrise_str, "%H:%M").time()
             sunset_time = datetime.strptime(sunset_str, "%H:%M").time()
         except ValueError:
             return jsonify({"error": "Invalid time format (expected HH:MM)"}), 400
 
+        # Visualization setup (unchanged from original)
         plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(20, 16), facecolor='#1a1a1a')
         fig.patch.set_edgecolor('#FFA500')
@@ -210,11 +210,12 @@ def daily_visualisation():
 
         ax.set_xlim(radius+7, -radius-7)
 
+        # Base daylight arc
         daylight_arc = Arc(center, 2*radius, 2*radius, angle=0,
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # MODIFIED SEGMENT DRAWING: Using the new outdoor_segments calculation
+        # Draw individual outdoor segments (using modified segments)
         for start, end in outdoor_segments:
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
@@ -228,7 +229,7 @@ def daily_visualisation():
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
 
-        # Rest of your original hour markers, current time indicator, etc.
+        # Original hour markers code (unchanged)
         sunrise_dt = datetime.combine(today, sunrise_time)
         sunset_dt = datetime.combine(today, sunset_time)
         hour_markers = []
@@ -264,6 +265,7 @@ def daily_visualisation():
                        color='white', ha='center', va='center',
                        fontsize=14, alpha=0.8)
 
+        # Current time indicator (unchanged)
         current_time = device_time.time()
         current_angle = time_to_daylight_angle(current_time)
         rad_angle = np.radians(current_angle)
@@ -276,6 +278,7 @@ def daily_visualisation():
                markersize=17,
                alpha=0.6)
 
+        # Sunrise/sunset labels (unchanged)
         ax.text(radius+2.8, -1.3, sunrise_str,
                color='white', ha='left', va='center',
                fontsize=28, fontweight='bold')
@@ -284,6 +287,7 @@ def daily_visualisation():
                color='white', ha='right', va='center',
                fontsize=28, fontweight='bold')
 
+        # Time display (unchanged)
         formatted_time = format_time(total_time_seconds)
         
         ax.text(0, 8, "RECOMMENDED EXPOSURE\n45 MINUTES", 
@@ -310,7 +314,7 @@ def daily_visualisation():
         plt.close(fig)
         buf.seek(0)
         
-        # Original response format maintained
+        # Original response format (unchanged)
         return jsonify({
             "image": base64.b64encode(buf.read()).decode('utf-8'),
             "total_time_outside": formatted_time,
@@ -323,7 +327,7 @@ def daily_visualisation():
             "hour_markers": [str(m) for m in hour_markers],
             "current_time": str(current_time),
             "data_available": bool(outdoor_segments),
-            "calculation_method": "timestamp_based_segments"
+            "calculation_method": "backward_segments"
         }), 200
 
     except Exception as e:
