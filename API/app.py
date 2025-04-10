@@ -154,7 +154,7 @@ def daily_visualisation():
         sunrise_str = data['sunrise']
         sunset_str = data['sunset']
 
-        # Get the most recent total_time_outside_for_given_day (weekly graph method)
+        # Get the most recent total_time_outside_for_given_day
         cur.execute(
             """SELECT total_time_outside_for_given_day 
                FROM final_table
@@ -166,7 +166,7 @@ def daily_visualisation():
         total_result = cur.fetchone()
         total_time_seconds = total_result[0] if total_result else 0
 
-        # Still get detailed records for accurate segment visualization
+        # Get all records for the day
         cur.execute(
             """SELECT time, "outside?", time_outside 
                FROM final_table
@@ -176,36 +176,13 @@ def daily_visualisation():
         )
         time_series = cur.fetchall()
 
-        # Reconstruct outdoor periods (accurate visualization)
-        outdoor_periods = []
-        current_out_start = None
-        last_outside_time = None
-        accumulated_time = 0
-
+        # Create individual segments for each outdoor record
+        outdoor_segments = []
         for record_time, is_outside, time_outside in time_series:
-            if is_outside:
-                if current_out_start is None:  # Start new outdoor period
-                    current_out_start = record_time
-                    accumulated_time = time_outside
-                else:
-                    # Add incremental time (max 10 mins)
-                    if last_outside_time:
-                        time_since_last = (record_time - last_outside_time).total_seconds()
-                        if time_since_last <= 600:
-                            accumulated_time += time_since_last
-            else:
-                if current_out_start is not None:  # End outdoor period
-                    end_time = current_out_start + timedelta(seconds=accumulated_time)
-                    outdoor_periods.append((current_out_start.time(), end_time.time()))
-                    current_out_start = None
-                    accumulated_time = 0
-            
-            last_outside_time = record_time if is_outside else None
-
-        # Handle still outside at end of day
-        if current_out_start is not None:
-            end_time = current_out_start + timedelta(seconds=accumulated_time)
-            outdoor_periods.append((current_out_start.time(), end_time.time()))
+            if is_outside and time_outside > 0:
+                start_time = record_time.time()
+                end_time = (record_time + timedelta(seconds=time_outside)).time()
+                outdoor_segments.append((start_time, end_time))
 
         # Convert sunrise/sunset strings to time objects
         try:
@@ -241,8 +218,8 @@ def daily_visualisation():
                          theta1=0, theta2=180, color='#3a3a3a', lw=arc_width)
         ax.add_patch(daylight_arc)
         
-        # Draw outdoor periods
-        for start, end in outdoor_periods:
+        # Draw individual outdoor segments
+        for start, end in outdoor_segments:
             start_clipped = max(start, sunrise_time)
             end_clipped = min(end, sunset_time)
             if start_clipped >= end_clipped: continue 
@@ -255,7 +232,7 @@ def daily_visualisation():
                             color='#FFA500', lw=arc_width)
             ax.add_patch(outdoor_arc)
 
-        # Hour markers
+        # Hour markers (same as before)
         sunrise_dt = datetime.combine(today, sunrise_time)
         sunset_dt = datetime.combine(today, sunset_time)
         hour_markers = []
@@ -345,14 +322,14 @@ def daily_visualisation():
             "total_time_outside": formatted_time,
             "sunrise": sunrise_str,
             "sunset": sunset_str,
-            "outdoor_periods": [
+            "outdoor_segments": [
                 {"start": str(start), "end": str(end)} 
-                for start, end in outdoor_periods
+                for start, end in outdoor_segments
             ],
             "hour_markers": [str(m) for m in hour_markers],
             "current_time": str(current_time),
             "data_available": bool(time_series),
-            "calculation_method": "weekly_graph_style"
+            "calculation_method": "individual_segments"
         }), 200
 
     except Exception as e:
