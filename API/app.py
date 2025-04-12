@@ -532,83 +532,81 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         
         lux = calculate_lux(weather)
         is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD and not is_connected_to_wifi
-        skip_db_update = sunrise and sunset and not is_daytime(sunrise, sunset, current_datetime)
 
-        if not skip_db_update:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT time, "outside?", 
-                       time_outside, total_time_outside, total_time_outside_for_given_day 
-                FROM final_table 
-                WHERE user_id = %s 
-                ORDER BY time DESC 
-                LIMIT 1
-                """,
-                (data['user_id'],)
-            )
-            last_record = cur.fetchone()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT time, "outside?", 
+                   time_outside, total_time_outside, total_time_outside_for_given_day 
+            FROM final_table 
+            WHERE user_id = %s 
+            ORDER BY time DESC 
+            LIMIT 1
+            """,
+            (data['user_id'],)
+        )
+        last_record = cur.fetchone()
 
-            # Initialize values
-            time_outside = 0
-            total_time_outside = last_record[3] if last_record else 0
-            total_time_outside_for_given_day = last_record[4] if last_record else 0
-            incremental_time = 0
+        # Initialize values
+        time_outside = 0
+        total_time_outside = last_record[3] if last_record else 0
+        total_time_outside_for_given_day = last_record[4] if last_record else 0
+        incremental_time = 0
 
-            if last_record:
-                time_since_last = (current_datetime - last_record[0]).total_seconds()
-                incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
-                last_date = last_record[0].date()
+        if last_record:
+            time_since_last = (current_datetime - last_record[0]).total_seconds()
+            incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
+            last_date = last_record[0].date()
 
-                # Calculate time_outside (capped at 10 mins if previous was outside and same day)
-                if last_record[1] and (current_date == last_date):
-                    time_outside = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
+            # Calculate time_outside (capped at 10 mins if previous was outside and same day)
+            if last_record[1] and (current_date == last_date):
+                time_outside = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
 
-                # Reset daily total if new day
-                if current_date > last_date:
-                    total_time_outside_for_given_day = 0
-
-                # Update totals
-                total_time_outside += time_outside  # Only add the new time_outside value
-                total_time_outside_for_given_day += time_outside  # Only add the new time_outside value
-
-            # First record handling
-            elif is_outside:
-                time_outside = 0  # No previous record to compare with
-                total_time_outside = 0
+            # Reset daily total if new day
+            if current_date > last_date:
                 total_time_outside_for_given_day = 0
 
-            total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
+            # Update totals
+            total_time_outside += time_outside  # Only add the new time_outside value
+            total_time_outside_for_given_day += time_outside  # Only add the new time_outside value
 
-            cur.execute(
-                """
-                INSERT INTO final_table (
-                    user_id, time, "outside?", 
-                    time_outside, total_time_outside, total_time_outside_for_given_day,
-                    total_available_hours, weather, temperature, uv, gps_accuracy, lux
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    data['user_id'], current_datetime, is_outside,
-                    time_outside, total_time_outside, total_time_outside_for_given_day,
-                    total_available_hours, weather, temperature, uv, gps_accuracy, lux
-                )
+        # First record handling
+        elif is_outside:
+            time_outside = 0  # No previous record to compare with
+            total_time_outside = 0
+            total_time_outside_for_given_day = 0
+
+        total_available_hours = calculate_available_hours(sunrise, sunset) if sunrise and sunset else 0
+
+        cur.execute(
+            """
+            INSERT INTO final_table (
+                user_id, time, "outside?", 
+                time_outside, total_time_outside, total_time_outside_for_given_day,
+                total_available_hours, weather, temperature, uv, gps_accuracy, lux
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                data['user_id'], current_datetime, is_outside,
+                time_outside, total_time_outside, total_time_outside_for_given_day,
+                total_available_hours, weather, temperature, uv, gps_accuracy, lux
             )
-            conn.commit()
-            conn.close()
+        )
+        conn.commit()
+        conn.close()
 
         response_data = {
             "is_outside": is_outside,
             "gps_accuracy": gps_accuracy,
-            "time_outside": time_outside if not skip_db_update else None,
-            "total_time_outside": total_time_outside if not skip_db_update else None,
-            "total_time_outside_for_given_day": total_time_outside_for_given_day if not skip_db_update else None,
+            "time_outside": time_outside,
+            "total_time_outside": total_time_outside,
+            "total_time_outside_for_given_day": total_time_outside_for_given_day,
             "weather": weather,
             "temperature": temperature,
             "uv": uv,
             "lux": lux,
-            "database_updated": not skip_db_update
+            "database_updated": True
         }
 
         return response_data, 200
