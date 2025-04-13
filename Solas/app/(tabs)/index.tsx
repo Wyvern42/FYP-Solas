@@ -21,8 +21,9 @@ export default function HomeScreen() {
   } = useLocation();
 
   const [feedbackSubmitted, setFeedbackSubmitted] = useState<boolean>(false);
+  const [feedbackTimestamp, setFeedbackTimestamp] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [dailyVisualization, setDailyVisualization] = useState<string | null>(null);
+  const [dailyVisualisation, setDailyVisualisation] = useState<string | null>(null);
 
   // Start background tracking when the app loads
   useEffect(() => {
@@ -51,9 +52,8 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Fetch daily visualization when user_id or sunrise/sunset changes
   useEffect(() => {
-    const fetchDailyVisualization = async () => {
+    const fetchDailyVisualisation = async () => {
       if (!user_id || !sunrise || !sunset) return;
       
       try {
@@ -75,14 +75,14 @@ export default function HomeScreen() {
         }
 
         const data = await response.json();
-        setDailyVisualization(data.image);
+        setDailyVisualisation(data.image);
       } catch (error) {
         console.error('Error fetching daily visualization:', error);
       }
     };
 
-    fetchDailyVisualization();
-  }, [user_id, sunrise, sunset]);
+    fetchDailyVisualisation();
+  }, [user_id, sunrise, sunset, refreshing]);
 
   // Handle pull-to-refresh
   const onRefresh = async () => {
@@ -122,6 +122,7 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!loading) {
       setFeedbackSubmitted(false);
+      setFeedbackTimestamp(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     }
   }, [loading]);
 
@@ -130,7 +131,7 @@ export default function HomeScreen() {
       headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
       headerImage={
         <Image
-          source={require('@/assets/images/sun-black-bk.png')}
+          source={require('@/assets/images/sun-full-black.png')}
           style={styles.reactLogo}
         />
       }
@@ -143,18 +144,20 @@ export default function HomeScreen() {
       </ThemedView>
 
       <ThemedView style={styles.stepContainer}>
-        {dailyVisualization ? (
-          <View style={styles.visualizationContainer}>
-            <Image 
-              source={{ uri: `data:image/png;base64,${dailyVisualization}` }}
-              style={styles.visualizationImage}
-              resizeMode="contain"
-            />
-          </View>
-        ) : (
-          <ActivityIndicator size="large" color="#FFA500" />
-        )}
-      </ThemedView>
+      {refreshing ? (
+        <ActivityIndicator size="large" color="#FFA500" />
+      ) : dailyVisualisation ? (
+        <View style={styles.visualizationContainer}>
+          <Image 
+            source={{ uri: `data:image/png;base64,${dailyVisualisation}` }}
+            style={styles.visualizationImage}
+            resizeMode="contain"
+          />
+        </View>
+      ) : (
+        <ActivityIndicator size="large" color="#FFA500" />
+      )}
+    </ThemedView>
 
       <ThemedView style={styles.stepContainer}>
         <ThemedText type="subtitle">Current Status</ThemedText>
@@ -180,7 +183,12 @@ export default function HomeScreen() {
               </View>
             )}
             {feedbackSubmitted && (
-              <ThemedText style={{ color: '#FFA500' }}>Thank you for your feedback!</ThemedText>
+              <ThemedView style={{ alignItems: 'center', marginTop: 10 }}>
+                <ThemedText style={{ color: '#FFA500' }}>Thank you for your feedback!</ThemedText>
+                <ThemedText style={{ fontSize: 12, color: 'gray' }}>
+                  Submitted at: {feedbackTimestamp}
+                </ThemedText>
+              </ThemedView>
             )}
           </>
         )}
@@ -202,7 +210,7 @@ const styles = StyleSheet.create({
   },
   reactLogo: {
     height: 250,
-    width: 400,
+    width: 450,
     bottom: 0,
     left: 0,
     position: 'absolute',
