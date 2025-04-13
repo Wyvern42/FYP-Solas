@@ -3,17 +3,22 @@ import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
 import * as SecureStore from 'expo-secure-store';
 import { fetchWeatherData, fetchAstroData } from './weatherService';
-import { convertTo24HourFormat } from '../utils/timeUtils';
+import { convertTo24HourFormat, formatTimeForDatabase } from '@/utils/timeUtils';
 
 // Define the background task name
 export const LOCATION_TASK_NAME = 'background-location-task';
+
+// Helper function to get current time in ISO format
+const getCurrentTime = () => {
+  return new Date().toISOString();
+};
 
 // Define the background task
 TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   try {
     // Get a single, short-lived location update
     const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: Location.Accuracy.BestForNavigation,
     });
 
     const { accuracy, latitude, longitude } = location.coords;
@@ -44,6 +49,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
         uv: weatherData.current.uv,
         sunrise: convertTo24HourFormat(astroData.astronomy.astro.sunrise),
         sunset: convertTo24HourFormat(astroData.astronomy.astro.sunset),
+        device_time: formatTimeForDatabase(new Date())
       }),
     });
 
@@ -62,7 +68,7 @@ export const startBackgroundTracking = async () => {
   const { status } = await Location.requestBackgroundPermissionsAsync();
   if (status === 'granted') {
     await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: Location.Accuracy.BestForNavigation,
       timeInterval: 5 * 60 * 1000, // 5 minutes
       distanceInterval: 100, // 100 meters
       showsBackgroundLocationIndicator: true, // Show the blue bar only during the check

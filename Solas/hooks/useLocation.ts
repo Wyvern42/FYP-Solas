@@ -3,7 +3,7 @@ import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
 import { fetchWeatherData, fetchAstroData } from '@/services/weatherService';
 import { generateAndStoreUserId } from '@/services/userService';
-import { convertTo24HourFormat } from '@/utils/timeUtils';
+import { convertTo24HourFormat, formatTimeForDatabase } from '@/utils/timeUtils';
 
 export const useLocation = () => {
   const [isOutside, setIsOutside] = useState<boolean | null>(null);
@@ -17,6 +17,11 @@ export const useLocation = () => {
   const [uv, setUv] = useState<number | null>(null);
   const [sunrise, setSunrise] = useState<string | null>(null);
   const [sunset, setSunset] = useState<string | null>(null);
+
+  // Helper function to get current time in ISO format
+  const getCurrentTime = () => {
+    return new Date().toISOString();
+  };
 
   const fetchLocation = async () => {
     if (!user_id) return;
@@ -34,7 +39,7 @@ export const useLocation = () => {
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation });
       setAccuracy(location.coords.accuracy);
 
       const weatherData = await fetchWeatherData(location.coords.latitude, location.coords.longitude);
@@ -60,6 +65,7 @@ export const useLocation = () => {
           uv: weatherData.current.uv,
           sunrise: convertTo24HourFormat(astroData.astronomy.astro.sunrise),
           sunset: convertTo24HourFormat(astroData.astronomy.astro.sunset),
+          device_time: formatTimeForDatabase(new Date())
         }),
       });
 

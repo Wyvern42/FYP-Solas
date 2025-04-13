@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Button, RefreshControl, AppState, AppStateStatus, View } from 'react-native';
-import { HelloWave } from '@/components/HelloWave';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useLocation } from '@/hooks/useLocation';
 import { startBackgroundTracking, stopBackgroundTracking } from '@/services/backgroundTask';
+import { formatTimeForDatabase } from '@/utils/timeUtils';
 
 export default function HomeScreen() {
   const {
@@ -57,7 +57,7 @@ export default function HomeScreen() {
       if (!user_id || !sunrise || !sunset) return;
       
       try {
-        const response = await fetch('http://16.170.231.125:5000/daily-visualization', {
+        const response = await fetch('http://16.170.231.125:5000/daily-visualisation', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -65,7 +65,8 @@ export default function HomeScreen() {
           body: JSON.stringify({
             user_id,
             sunrise,
-            sunset
+            sunset,
+            device_time: formatTimeForDatabase(new Date())
           }),
         });
 
@@ -102,6 +103,7 @@ export default function HomeScreen() {
           user_id: user_id,
           correct_result: correctResult,
           gps_accuracy: accuracy,
+          device_time: formatTimeForDatabase(new Date())
         }),
       });
 
@@ -141,7 +143,6 @@ export default function HomeScreen() {
       </ThemedView>
 
       <ThemedView style={styles.stepContainer}>
-        
         {dailyVisualization ? (
           <View style={styles.visualizationContainer}>
             <Image 
@@ -151,14 +152,14 @@ export default function HomeScreen() {
             />
           </View>
         ) : (
-          <ActivityIndicator size="large" color="#0000ff" />
+          <ActivityIndicator size="large" color="#FFA500" />
         )}
       </ThemedView>
 
       <ThemedView style={styles.stepContainer}>
         <ThemedText type="subtitle">Current Status</ThemedText>
         {loading ? (
-          <ActivityIndicator size="small" color="#0000ff" />
+          <ActivityIndicator size="large" color="#FFA500" />
         ) : error ? (
           <ThemedText style={{ color: 'red' }}>{error}</ThemedText>
         ) : (
@@ -179,7 +180,7 @@ export default function HomeScreen() {
               </View>
             )}
             {feedbackSubmitted && (
-              <ThemedText style={{ color: 'green' }}>Thank you for your feedback!</ThemedText>
+              <ThemedText style={{ color: '#FFA500' }}>Thank you for your feedback!</ThemedText>
             )}
           </>
         )}
