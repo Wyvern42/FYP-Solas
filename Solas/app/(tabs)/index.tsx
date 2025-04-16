@@ -82,7 +82,7 @@ export default function HomeScreen() {
     };
 
     fetchDailyVisualisation();
-  }, [user_id, sunrise, sunset, refreshing]);
+  }, [user_id, sunrise, sunset]);
 
   // Handle pull-to-refresh
   const onRefresh = async () => {

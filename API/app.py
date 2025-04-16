@@ -412,11 +412,6 @@ def weekly_time_outside_graph():
             zorder=2
         )
         
-        ax.set_title('Weekly Time Spent Outside (Minutes)', 
-                    color='#FFA500', 
-                    pad=15, 
-                    fontsize=16, 
-                    fontweight='bold')
         
         ax.set_xlabel('Minutes Outside', 
                      color='#FFA500', 
