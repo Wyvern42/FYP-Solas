@@ -89,6 +89,7 @@ export default function HomeScreen() {
     setRefreshing(true);
     await fetchLocation();
     setRefreshing(false);
+    
   };
 
   // Submit feedback to the server
@@ -144,9 +145,7 @@ export default function HomeScreen() {
       </ThemedView>
 
       <ThemedView style={styles.stepContainer}>
-      {refreshing ? (
-        <ActivityIndicator size="large" color="#FFA500" />
-      ) : dailyVisualisation ? (
+      {dailyVisualisation ? (
         <View style={styles.visualizationContainer}>
           <Image 
             source={{ uri: `data:image/png;base64,${dailyVisualisation}` }}
