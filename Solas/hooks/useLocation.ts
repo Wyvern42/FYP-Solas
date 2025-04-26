@@ -18,10 +18,6 @@ export const useLocation = () => {
   const [sunrise, setSunrise] = useState<string | null>(null);
   const [sunset, setSunset] = useState<string | null>(null);
 
-  // Helper function to get current time in ISO format
-  const getCurrentTime = () => {
-    return new Date().toISOString();
-  };
 
   const fetchLocation = async () => {
     if (!user_id) return;

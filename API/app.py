@@ -383,7 +383,6 @@ def weekly_time_outside_graph():
         )
         results = cur.fetchall()
 
-        days = []
         minutes = []
         day_names = []
         
@@ -526,6 +525,7 @@ def check_location() -> Tuple[Dict[str, Any], int]:
         gps_accuracy = round(float(data['gps_accuracy']), 2)
         
         lux = calculate_lux(weather)
+        
         is_outside = gps_accuracy <= GPS_ACCURACY_THRESHOLD and not is_connected_to_wifi
         skip_db_update = sunrise and sunset and not is_daytime(sunrise, sunset, current_datetime)
 
@@ -549,11 +549,10 @@ def check_location() -> Tuple[Dict[str, Any], int]:
             time_outside = 0
             total_time_outside = last_record[3] if last_record else 0
             total_time_outside_for_given_day = last_record[4] if last_record else 0
-            incremental_time = 0
+            
 
             if last_record:
                 time_since_last = (current_datetime - last_record[0]).total_seconds()
-                incremental_time = min(time_since_last, MAX_TIME_BETWEEN_UPDATES)
                 last_date = last_record[0].date()
 
                 # Calculate time_outside (capped at 10 mins if previous was outside and same day)

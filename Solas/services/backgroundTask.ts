@@ -6,15 +6,11 @@ import { fetchWeatherData, fetchAstroData } from './weatherService';
 import { convertTo24HourFormat, formatTimeForDatabase } from '@/utils/timeUtils';
 
 // Define the background task name
-export const LOCATION_TASK_NAME = 'background-location-task';
+export const LOCATION_TASK = 'background-location-task';
 
-// Helper function to get current time in ISO format
-const getCurrentTime = () => {
-  return new Date().toISOString();
-};
 
 // Define the background task
-TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
+TaskManager.defineTask(LOCATION_TASK, async () => {
   try {
     // Get a single, short-lived location update
     const location = await Location.getCurrentPositionAsync({
@@ -67,11 +63,10 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
 export const startBackgroundTracking = async () => {
   const { status } = await Location.requestBackgroundPermissionsAsync();
   if (status === 'granted') {
-    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+    await Location.startLocationUpdatesAsync(LOCATION_TASK, {
       accuracy: Location.Accuracy.BestForNavigation,
       timeInterval: 5 * 60 * 1000, // 5 minutes
-      distanceInterval: 100, // 100 meters
-      showsBackgroundLocationIndicator: true, // Show the blue bar only during the check
+      showsBackgroundLocationIndicator: true, 
     });
     console.log('Background tracking started');
   } else {
@@ -81,6 +76,6 @@ export const startBackgroundTracking = async () => {
 
 // Function to stop background tracking
 export const stopBackgroundTracking = async () => {
-  await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  await Location.stopLocationUpdatesAsync(LOCATION_TASK);
   console.log('Background tracking stopped');
 };

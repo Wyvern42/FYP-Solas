@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Button, RefreshControl, AppState, AppStateStatus, View } from 'react-native';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
@@ -24,6 +24,44 @@ export default function HomeScreen() {
   const [feedbackTimestamp, setFeedbackTimestamp] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [dailyVisualisation, setDailyVisualisation] = useState<string | null>(null);
+  const [initialLoadComplete, setInitialLoadComplete] = useState<boolean>(false);
+
+  // Memoized function to fetch daily visualization
+  const fetchDailyVisualisation = useCallback(async () => {
+    if (!user_id || !sunrise || !sunset) return;
+    
+    try {
+      const response = await fetch('http://16.170.231.125:5000/daily-visualisation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id,
+          sunrise,
+          sunset,
+          device_time: formatTimeForDatabase(new Date())
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch daily visualization');
+      }
+
+      const data = await response.json();
+      setDailyVisualisation(data.image);
+    } catch (error) {
+      console.error('Error fetching daily visualization:', error);
+    }
+  }, [user_id, sunrise, sunset]);
+
+  // Initial load of daily visualization (only once)
+  useEffect(() => {
+    if (!initialLoadComplete && user_id && sunrise && sunset) {
+      fetchDailyVisualisation();
+      setInitialLoadComplete(true);
+    }
+  }, [user_id, sunrise, sunset, initialLoadComplete, fetchDailyVisualisation]);
 
   // Start background tracking when the app loads
   useEffect(() => {
@@ -52,44 +90,12 @@ export default function HomeScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    const fetchDailyVisualisation = async () => {
-      if (!user_id || !sunrise || !sunset) return;
-      
-      try {
-        const response = await fetch('http://16.170.231.125:5000/daily-visualisation', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            user_id,
-            sunrise,
-            sunset,
-            device_time: formatTimeForDatabase(new Date())
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to fetch daily visualization');
-        }
-
-        const data = await response.json();
-        setDailyVisualisation(data.image);
-      } catch (error) {
-        console.error('Error fetching daily visualization:', error);
-      }
-    };
-
-    fetchDailyVisualisation();
-  }, [user_id, sunrise, sunset]);
-
   // Handle pull-to-refresh
   const onRefresh = async () => {
     setRefreshing(true);
     await fetchLocation();
+    await fetchDailyVisualisation(); // Fetch new visualization on manual refresh
     setRefreshing(false);
-    
   };
 
   // Submit feedback to the server
