@@ -27,14 +27,12 @@ def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 def parse_device_time(device_time_str: str) -> datetime:
-    """Parse device time string in DD-MM-YYYY HH:MM:SS format as Dublin time (no timezone)"""
     try:
         return datetime.strptime(device_time_str, "%d-%m-%Y %H:%M:%S")
     except ValueError as e:
         raise ValueError(f"Invalid device_time format: {str(e)}")
 
 def format_time(total_seconds: int) -> str:
-    """Convert total seconds into hrs:mins:secs format."""
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{int(hours)}:{int(minutes):02d}:{int(seconds):02d}"
